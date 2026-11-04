@@ -71,6 +71,11 @@ class RouteSearch {
   constructor(points, warmupLimit = points.length - 2, integerWeights = false) {
     const started = performance.now();
     this.n = points.length;
+    this.wide = this.n > 30;
+    this.one = this.wide ? 1n : 1;
+    this.bit = points.map((_, i) => this.wide ? 1n << BigInt(i) : 1 << i);
+    const full = this.wide ? (1n << BigInt(this.n)) - 1n : (1 << this.n) - 1;
+    this.lowIndex = this.wide ? new Map(this.bit.map((mask, i) => [mask, i])) : null;
     this.warmupLimit = Math.min(this.n - 2, Math.max(0, Math.floor(warmupLimit)));
     this.warmupCount = 0;
     this.greedyChecks = 0;
@@ -95,9 +100,9 @@ class RouteSearch {
     this.near = this.dist.map(row => row.map((_, i) => i).sort((i, j) => row[i] - row[j]));
     this.next = {
       paths: [[this.a], [this.a]], len: [0, 0],
-      allowed: points.map((_, i) => ((1 << this.n) - 1) ^ (1 << i)),
+      allowed: this.bit.map(mask => full ^ mask),
       forks: [null, null],
-      free: ((1 << this.n) - 1) ^ (1 << this.a) ^ (1 << this.b), side: 0, cost: 0
+      free: full ^ this.bit[this.a] ^ this.bit[this.b], side: 0, cost: 0
     };
     this.queues = [new CandidateQueue(), new CandidateQueue()];
     this.queueLimit = INITIAL_QUEUE_LIMIT;
@@ -138,7 +143,7 @@ class RouteSearch {
       const end = seed.paths[side].at(-1);
       const city = this.near[end].find(i => {
         this.greedyChecks++;
-        return seed.free & (1 << i);
+        return seed.free & this.bit[i];
       });
       seed = this.extend(seed, side, city);
     }
@@ -221,12 +226,12 @@ class RouteSearch {
     paths[side] = [...paths[side], city];
     const blocked = this.blockedByEdge(from, city);
     const allowed = s.allowed.map((neighbors, i) => neighbors & ~blocked[i]);
-    return { paths, len, allowed, forks: s.forks, free: s.free & ~(1 << city), side, cost: len[side] };
+    return { paths, len, allowed, forks: s.forks, free: s.free & ~this.bit[city], side, cost: len[side] };
   }
   blockedByEdge(from, to) {
     if (this.edgeBlocks[from][to]) return this.edgeBlocks[from][to];
     const turn = this.turn[from][to];
-    const blocked = new Int32Array(this.n);
+    const blocked = this.wide ? Array(this.n).fill(0n) : new Int32Array(this.n);
     for (let a = 0; a < this.n; a++) {
       for (let b = a + 1; b < this.n; b++) {
         if (turn[a] * turn[b] >= 0) continue;
@@ -238,8 +243,8 @@ class RouteSearch {
             const d = this.dist, crossed = d[from][to] + d[a][b];
             if (crossed <= Math.max(d[from][a] + d[to][b], d[from][b] + d[to][a])) continue;
           }
-          blocked[a] |= 1 << b;
-          blocked[b] |= 1 << a;
+          blocked[a] |= this.bit[b];
+          blocked[b] |= this.bit[a];
         }
       }
     }
@@ -247,36 +252,40 @@ class RouteSearch {
     return blocked;
   }
   checkedExtension(s, side, city) {
-    if (!(s.allowed[s.paths[side].at(-1)] & (1 << city))) return null;
+    if (!(s.allowed[s.paths[side].at(-1)] & this.bit[city])) return null;
     const child = this.extend(s, side, city);
     // После последнего свободного города обе дороги в B обязательны и имеют общий конец.
     if (!child.free && child.paths.some(path => {
       const end = path.at(-1);
-      return end !== this.b && !(child.allowed[end] & (1 << this.b));
+      return end !== this.b && !(child.allowed[end] & this.bit[this.b]);
     })) return null;
     return child;
   }
   blockedCity(s, u, v) {
     // Остаток цикла — путь от u до v. Если обе ветви открыты, B лежит внутри пути.
-    const inner = u === this.b || v === this.b ? s.free : s.free | (1 << this.b);
-    const vertices = inner | (1 << u) | (1 << v);
-    for (let bits = inner; bits; bits &= bits - 1) {
-      const city = 31 - Math.clz32(bits & -bits);
+    const inner = u === this.b || v === this.b ? s.free : s.free | this.bit[this.b];
+    const vertices = inner | this.bit[u] | this.bit[v];
+    for (let bits = inner; bits; bits &= bits - this.one) {
+      const city = this.firstCity(bits);
       const neighbors = s.allowed[city] & vertices;
-      if (!(neighbors & (neighbors - 1))) return city;
+      if (!(neighbors & (neighbors - this.one))) return city;
     }
     const exits = s.allowed[u] & inner;
-    if (!exits || (u === v && !(exits & (exits - 1)))) return u;
+    if (!exits || (u === v && !(exits & (exits - this.one)))) return u;
     if (!(s.allowed[v] & inner)) return v;
     // После удаления обоих концов внутренние города всё ещё образуют связный путь.
     let frontier = inner & -inner, unseen = inner ^ frontier;
     while (frontier && unseen) {
-      const city = 31 - Math.clz32(frontier & -frontier);
+      const city = this.firstCity(frontier);
       const reached = s.allowed[city] & unseen;
-      frontier = (frontier & (frontier - 1)) | reached;
+      frontier = (frontier & (frontier - this.one)) | reached;
       unseen ^= reached;
     }
-    return unseen ? 31 - Math.clz32(unseen & -unseen) : -1;
+    return unseen ? this.firstCity(unseen) : -1;
+  }
+  firstCity(bits) {
+    const lowest = bits & -bits;
+    return this.wide ? this.lowIndex.get(lowest) : 31 - Math.clz32(lowest);
   }
   retryLongerBranch(s) {
     const side = s.len[0] >= s.len[1] ? 0 : 1;
@@ -298,6 +307,7 @@ class RouteSearch {
   }
   treeLength(free) {
     if (this.trees.has(free)) return this.trees.get(free);
+    if (this.wide) return this.wideTreeLength(free);
     // После удаления концов ветвей остаток цикла связывает свободные города и B.
     const cost = this.dist[this.b].slice();
     let left = free, length = 0;
@@ -317,9 +327,26 @@ class RouteSearch {
     if (this.trees.size < 16000) this.trees.set(free, length);
     return length;
   }
+  wideTreeLength(free) {
+    // Извлекаем вершины один раз: внутренние циклы Прима работают с номерами, без операций над BigInt.
+    const cities = [];
+    for (let bits = free; bits; bits &= bits - 1n) cities.push(this.firstCity(bits));
+    const cost = this.dist[this.b].slice();
+    let length = 0;
+    while (cities.length) {
+      let best = 0;
+      for (let i = 1; i < cities.length; i++) if (cost[cities[i]] < cost[cities[best]]) best = i;
+      const city = cities[best];
+      cities.splice(best, 1);
+      length += cost[city];
+      for (const i of cities) cost[i] = Math.min(cost[i], this.dist[city][i]);
+    }
+    if (this.trees.size < 16000) this.trees.set(free, length);
+    return length;
+  }
   lowerBound(s, u, v) {
-    const remaining = s.free | (1 << this.b);
-    const connection = end => this.dist[end][this.near[end].find(i => remaining & (1 << i))];
+    const remaining = s.free | this.bit[this.b];
+    const connection = end => this.dist[end][this.near[end].find(i => remaining & this.bit[i])];
     return s.len[0] + s.len[1] + Math.max(
       this.dist[u][this.b] + this.dist[v][this.b],
       this.treeLength(s.free) + connection(u) + connection(v)
@@ -424,7 +451,9 @@ class RouteSearch {
     const [u, v] = s.paths.map(path => path.at(-1));
     const g = s.len[0] + s.len[1];
     const record = this.best ? this.best.len[0] + this.best.len[1] : Infinity;
-    const key = (s.free * this.n + Math.min(u, v)) * this.n + Math.max(u, v);
+    const ends = Math.min(u, v) * this.n + Math.max(u, v);
+    // При n ≤ 100 пара концов занимает меньше 14 бит.
+    const key = this.wide ? (s.free << 14n) | BigInt(ends) : s.free * this.n * this.n + ends;
     const previous = this.seen.get(key);
     if (!s.free) {
       this.seekingFirstCycle = false;
@@ -455,7 +484,7 @@ class RouteSearch {
       const other = side === 0 ? v : u;
       const children = [];
       for (const city of this.near[end]) {
-        if ((s.free & (1 << city)) || (city === this.b && other !== this.b)) {
+        if ((s.free & this.bit[city]) || (city === this.b && other !== this.b)) {
           const child = this.checkedExtension(s, side, city);
           if (child) children.push(child);
           else this.crossingCuts++;

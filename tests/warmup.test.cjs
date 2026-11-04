@@ -103,6 +103,27 @@ test('Ожидание не меняет время; пошаговый и не�
   assert.deepEqual(run.best.paths, other.best.paths);
 });
 
+test('Ручной поиск до 100 городов проходит старшие биты и доказывает известный оптимум', () => {
+  for (const n of [31, 32, 63, 64, 65, 100]) {
+    const points = Array.from({ length: n }, (_, i) => ({ x: (i * (n - 1)) % n, y: 0 }));
+    const run = new RouteSearch(points, 0, true);
+    run.advance(n + 1);
+    assert.ok(run.done);
+    assert.equal(run.best.len[0] + run.best.len[1], (n - 1) * 2000);
+    const [out, back] = run.best.paths;
+    const tour = out.concat(back.slice(1, -1).reverse());
+    assert.equal(tour.length, n);
+    assert.equal(new Set(tour).size, n);
+  }
+  const points = seriesField(100, 0);
+  [points[0], points[1], points[64], points[99]] = [[0, 0], [3, 3], [1, 3], [3, 1]].map(([x, y]) => ({ x, y }));
+  const run = new RouteSearch(points);
+  assert.ok(run.blockedByEdge(0, 1)[64] & (1n << 99n));
+  assert.equal(run.warmupCount, 98);
+  run.advance(3);
+  assert.equal(run.mainSteps, 3);
+});
+
 test('Прежние серийные и ручные результаты не занижают средние новых показателей', () => {
   const row = emptyStats(10);
   const old = { values: { steps: 30 } };

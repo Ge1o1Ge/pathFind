@@ -1,6 +1,7 @@
 'use strict';
 
 const SERIES_TARGET = 1000;
+const MAX_SERIES_CITIES = 30;
 const PLAN_KEY = 'series-plan';
 const workMetrics = {
   mainSteps: ['Состояния основного поиска', 'Сколько состояний двух ветвей было обработано до доказательства оптимума. Разминка сюда не входит.'],
@@ -40,7 +41,7 @@ function statsReport(rows, plan = initialPlan()) {
     return { series, manual, completed, withWarmupSteps, byBound, byBoundPercent: completed ? 100 * byBound / completed : null };
   }
   let series = 0, manual = 0, byBound = 0, withWarmupSteps = 0;
-  const sizes = rows.map(row => {
+  const sizes = rows.filter(row => row.n <= MAX_SERIES_CITIES || row.manual > 0).map(row => {
     series += row.series;
     manual += row.manual;
     byBound += row.byBound;
@@ -52,7 +53,7 @@ function statsReport(rows, plan = initialPlan()) {
       metrics[key] = m ? { ...m, mean: m.sum / (m.samples ?? samples.completed) } : null;
     }
     const batchStart = plan.starts[row.n] || 0;
-    return { n: row.n, ...samples, batchStart, seriesTarget: batchStart + SERIES_TARGET, metrics };
+    return { n: row.n, ...samples, batchStart, seriesTarget: row.n <= MAX_SERIES_CITIES ? batchStart + SERIES_TARGET : null, metrics };
   });
   return {
     formatVersion: 1, algorithm: 'khvastuns', exportedAt: new Date().toISOString(), seriesTargetPerSize: SERIES_TARGET,
@@ -178,7 +179,7 @@ function initStatistics(maxCities) {
     applySnapshot(await readStatistics(await database, cityCounts));
   }
   function remaining(row) {
-    return row.series < (plan.starts[row.n] || 0) + SERIES_TARGET;
+    return row.n <= MAX_SERIES_CITIES && row.series < (plan.starts[row.n] || 0) + SERIES_TARGET;
   }
   function share(wins, total) {
     return total ? average.format(100 * wins / total) + ' %' : '—';
@@ -193,7 +194,7 @@ function initStatistics(maxCities) {
     el('stats-reset').disabled = busy || running || exporting;
     el('series-add').disabled = busy || running || exporting;
     const metric = el('stats-metric').value;
-    const batch = plan.only === null ? rows : [rows[plan.only - minCities]];
+    const batch = plan.only === null ? rows.filter(row => row.n <= MAX_SERIES_CITIES) : [rows[plan.only - minCities]];
     const completed = batch.reduce((s, row) => s + row.series - (plan.starts[row.n] || 0), 0);
     const total = rows.reduce((s, row) => s + row.series + row.manual, 0);
     const byBound = rows.reduce((s, row) => s + row.byBound, 0);
@@ -213,17 +214,17 @@ function initStatistics(maxCities) {
     el('series-error').textContent = error;
     el('overall-bound').textContent = 'Всего завершено по границе ' + share(byBound, total) + ' (' + integer.format(byBound) + ' из ' + integer.format(total) + ').';
     el('metric-description').textContent = statsMetrics[metric][1];
-    el('stats-rows').innerHTML = rows.map(row => {
+    el('stats-rows').innerHTML = rows.filter(row => row.n <= MAX_SERIES_CITIES || row.manual > 0).map(row => {
       const count = row.series + row.manual, m = row.metrics[metric];
       const measured = m ? m.samples ?? count : 0;
       const values = m ? [m.min, m.max, m.sum / measured].map(v => average.format(v)) : ['—', '—', '—'];
       return '<tr><th scope="row">' + row.n + '</th><td>' + integer.format(row.series) + '</td><td>' + integer.format(row.manual) + '</td>' +
         '<td>' + integer.format(measured) + '</td>' + values.map(v => '<td>' + v + '</td>').join('') + '<td title="' + row.byBound + ' из ' + count + '">' + share(row.byBound, count) + '</td>' +
-        '<td class="row-actions">' + ['restart', 'add'].map(action => {
+        '<td class="row-actions">' + (row.n > MAX_SERIES_CITIES ? 'Только вручную' : ['restart', 'add'].map(action => {
           const label = action === 'restart' ? 'Заново' : 'Ещё 1 000';
           return '<button class="outline" data-action="' + action + '" data-n="' + row.n + '" aria-label="' + label + ', ' + row.n + ' городов"' +
             (busy || running || exporting ? ' disabled' : '') + '>' + label + '</button>';
-        }).join(' ') + '</td></tr>';
+        }).join(' ')) + '</td></tr>';
     }).join('');
   }
   function schedulePaint() {
@@ -331,7 +332,7 @@ function initStatistics(maxCities) {
           saved[n - minCities] = emptyStats(n);
         } else if (action === 'add') {
           for (const row of saved) {
-            if (n === null || n === row.n) next.starts[row.n] = row.series;
+            if (row.n <= MAX_SERIES_CITIES && (n === null || n === row.n)) next.starts[row.n] = row.series;
           }
         }
         return true;
