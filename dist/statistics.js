@@ -20,6 +20,31 @@ function emptyStats(n) {
   return { n, series: 0, manual: 0, byBound: 0, metrics: {} };
 }
 
+function statsReport(rows) {
+  function counts(series, manual, byBound) {
+    const completed = series + manual;
+    return { series, manual, completed, byBound, byBoundPercent: completed ? 100 * byBound / completed : null };
+  }
+  let series = 0, manual = 0, byBound = 0;
+  const sizes = rows.map(row => {
+    series += row.series;
+    manual += row.manual;
+    byBound += row.byBound;
+    const samples = counts(row.series, row.manual, row.byBound);
+    const metrics = {};
+    for (const key of Object.keys(statsMetrics)) {
+      const m = row.metrics[key];
+      metrics[key] = m ? { ...m, mean: m.sum / samples.completed } : null;
+    }
+    return { n: row.n, ...samples, metrics };
+  });
+  return {
+    formatVersion: 1, exportedAt: new Date().toISOString(), seriesTargetPerSize: SERIES_TARGET,
+    metricLabels: Object.fromEntries(Object.entries(statsMetrics).map(([key, [label]]) => [key, label])),
+    totals: counts(series, manual, byBound), sizes
+  };
+}
+
 function addMeasurement(row, measurement, index) {
   // Две вкладки могут закончить одно поле серии. Индекс проверяется внутри транзакции.
   if (index !== null && row.series !== index) return false;
@@ -77,19 +102,23 @@ function initStatistics(maxCities) {
   const average = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 3 });
   const database = openStatsDatabase();
   let ready = false, running = false, task = null, worker = null, localRunner = null;
+  let exporting = false;
   let error = '', paintTimer = null;
 
   function merge(row) {
     const i = row.n - minCities, old = rows[i];
     if (old && row.series + row.manual >= old.series + old.manual) rows[i] = row;
   }
-  async function refresh() {
+  async function readSavedRows() {
     const db = await database;
-    const records = await new Promise((resolve, reject) => {
+    return new Promise((resolve, reject) => {
       const request = db.transaction('sizes').objectStore('sizes').getAll();
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
+  }
+  async function refresh() {
+    const records = await readSavedRows();
     records.forEach(merge);
     ready = true;
     paint();
@@ -102,6 +131,7 @@ function initStatistics(maxCities) {
     paintTimer = null;
     el('stats-tab').textContent = running ? 'Сбор сложности · идёт' : 'Сбор сложности';
     if (el('stats-panel').hidden) return;
+    el('stats-export').disabled = !ready || exporting;
     const metric = el('stats-metric').value;
     const completed = rows.reduce((s, row) => s + row.series, 0);
     const total = rows.reduce((s, row) => s + row.series + row.manual, 0);
@@ -200,6 +230,33 @@ function initStatistics(maxCities) {
   el('stats-tab').onclick = () => selectMode(true);
   el('stats-metric').innerHTML = Object.entries(statsMetrics).map(([key, m]) => '<option value="' + key + '">' + m[0] + '</option>').join('');
   el('stats-metric').onchange = paint;
+  el('stats-export').onclick = async () => {
+    if (!ready || exporting) return;
+    exporting = true;
+    el('stats-export').disabled = true;
+    const status = el('export-status');
+    try {
+      const records = await readSavedRows();
+      const saved = new Map(records.map(row => [row.n, row]));
+      const report = statsReport(rows.map(({ n }) => saved.get(n) || emptyStats(n)));
+      const file = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(file);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'pathfind-results-' + report.exportedAt.replace(/[:.]/g, '-') + '.json';
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      status.textContent = 'JSON подготовлен. Завершённых прогонов в сводке — ' + integer.format(report.totals.completed) + '.';
+    } catch {
+      status.textContent = 'Не удалось скачать сводку. Попробуй ещё раз.';
+    } finally {
+      exporting = false;
+      status.hidden = false;
+      el('stats-export').disabled = !ready;
+    }
+  };
   el('series-start').onclick = () => {
     if (running || !ready) return;
     running = true;

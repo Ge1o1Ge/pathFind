@@ -107,7 +107,9 @@
     </section>
     <section class="panel stats-table">
       <div class="panel-head"><h2><svg><use href="#layers"/></svg>Статистика по числу городов</h2>
-        <label class="metric-select">Показатель <select id="stats-metric"></select></label></div>
+        <label class="metric-select">Показатель <select id="stats-metric"></select></label>
+        <button id="stats-export" class="outline" disabled>Скачать JSON</button></div>
+      <p id="export-status" role="status" hidden></p>
       <p id="metric-description"></p>
       <p>Минимум, максимум и среднее включают завершённые поля из серии и ручного поиска. Повтор ручного поиска на том же поле учитывается один раз.</p>
       <p><b id="overall-bound"></b> Досрочное схождение учитывается, когда граница достигла рекорда при непустой очереди. Знаменатель — все завершённые поля.</p>
