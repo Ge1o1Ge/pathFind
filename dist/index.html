@@ -97,10 +97,11 @@
     <section class="panel series-panel">
       <div class="panel-head"><h2><svg><use href="#activity"/></svg>Автоматическая серия</h2><b id="series-total">0 / 28 000</b></div>
       <div class="series-body">
-        <p>По 1 000 полей на каждый размер. Завершённые результаты сохраняются в этом браузере. После перезагрузки текущее незавершённое поле рассчитывается заново.</p>
+        <p>Прогресс показывает текущую серию, а таблица — все накопленные результаты. «Ещё по 1 000» добавит к каждому размеру тысячу новых полей с его текущего счётчика. После перезагрузки незавершённое поле рассчитывается заново.</p>
         <progress id="series-progress" max="28000" value="0" aria-label="Завершено полей в серии"></progress>
         <div class="series-actions"><button id="series-start" class="primary" disabled><svg><use href="#play"/></svg><span id="series-start-label">Запустить серию</span></button>
           <button id="series-stop" class="outline" disabled><svg><use href="#stop"/></svg>Стоп</button>
+          <button id="series-add" class="outline" disabled>Ещё по 1 000</button>
           <span id="series-state" role="status">Загрузка статистики…</span></div>
         <p id="series-error" role="alert" hidden></p>
       </div>
@@ -108,12 +109,14 @@
     <section class="panel stats-table">
       <div class="panel-head"><h2><svg><use href="#layers"/></svg>Статистика по числу городов</h2>
         <label class="metric-select">Показатель <select id="stats-metric"></select></label>
-        <button id="stats-export" class="outline" disabled>Скачать JSON</button></div>
+        <button id="stats-export" class="outline" disabled>Скачать JSON</button>
+        <button id="stats-reset" class="outline" disabled>Сбросить всю статистику</button></div>
       <p id="export-status" role="status" hidden></p>
       <p id="metric-description"></p>
       <p>Минимум, максимум и среднее включают завершённые поля из серии и ручного поиска. В старых результатах счётчик шагов учитывал только основной поиск. Повтор ручного поиска на том же поле учитывается один раз.</p>
       <p><b id="overall-bound"></b> Досрочное схождение учитывается, когда граница достигла рекорда при непустой очереди. Знаменатель — все завершённые поля.</p>
-      <div class="table-scroll"><table><thead><tr><th scope="col">Городов</th><th scope="col">Серия / 1 000</th><th scope="col">Вручную</th><th scope="col">Мин.</th><th scope="col">Макс.</th><th scope="col">Среднее</th><th scope="col">По границе</th></tr></thead><tbody id="stats-rows"></tbody></table></div>
+      <p>В строке «Ещё 1 000» продолжает сбор только для выбранного размера. «Заново» очищает его серийные и ручные результаты и запускает тысячу полей с первого. Для смены серии во время сбора нажми «Стоп».</p>
+      <div class="table-scroll"><table><thead><tr><th scope="col">Городов</th><th scope="col">Серийные, всего</th><th scope="col">Вручную</th><th scope="col">Мин.</th><th scope="col">Макс.</th><th scope="col">Среднее</th><th scope="col">По границе</th><th scope="col">Серия для размера</th></tr></thead><tbody id="stats-rows"></tbody></table></div>
     </section>
   </section>
 </main>

@@ -1,6 +1,7 @@
 'use strict';
 
 const SERIES_TARGET = 1000;
+const PLAN_KEY = 'series-plan';
 const statsMetrics = {
   steps: ['Шаги до завершения', 'Каждый проверенный цикл разминки и каждая проверенная пара ветвей основного поиска дают по одному шагу.'],
   bestStep: ['Шаг нахождения оптимума', 'Номер шага, на котором впервые найден итоговый рекорд. Первый цикл разминки — шаг 1.'],
@@ -20,7 +21,7 @@ function emptyStats(n) {
   return { n, series: 0, manual: 0, byBound: 0, metrics: {} };
 }
 
-function statsReport(rows) {
+function statsReport(rows, plan = initialPlan()) {
   function counts(series, manual, byBound, withWarmupSteps) {
     const completed = series + manual;
     return { series, manual, completed, withWarmupSteps, byBound, byBoundPercent: completed ? 100 * byBound / completed : null };
@@ -37,7 +38,8 @@ function statsReport(rows) {
       const m = row.metrics[key];
       metrics[key] = m ? { ...m, mean: m.sum / samples.completed } : null;
     }
-    return { n: row.n, ...samples, metrics };
+    const batchStart = plan.starts[row.n] || 0;
+    return { n: row.n, ...samples, batchStart, seriesTarget: batchStart + SERIES_TARGET, metrics };
   });
   return {
     formatVersion: 1, exportedAt: new Date().toISOString(), seriesTargetPerSize: SERIES_TARGET,
@@ -73,15 +75,55 @@ function openStatsDatabase() {
   });
 }
 
-function saveMeasurement(db, n, measurement, index) {
+function initialPlan() {
+  return { n: PLAN_KEY, revision: 0, resetAt: 0, cleared: {}, starts: {}, only: null };
+}
+
+function generation(plan, n) {
+  return plan.cleared[n] ?? plan.resetAt;
+}
+
+function statsKey(plan, n) {
+  // После сброса старые вкладки могут писать по прежнему ключу, но не в новую выборку.
+  const version = generation(plan, n);
+  return version ? [version, n] : n;
+}
+
+function readStatistics(db, cityCounts, edit) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('sizes', edit ? 'readwrite' : 'readonly');
+    const store = tx.objectStore('sizes');
+    const read = store.getAll();
+    let snapshot;
+    read.onsuccess = () => {
+      const records = new Map(read.result.map(item => [String(item.n), item]));
+      const plan = records.get(PLAN_KEY) || initialPlan();
+      const rows = cityCounts.map(n => {
+        const saved = records.get(String(statsKey(plan, n)));
+        return saved?.row || saved || emptyStats(n);
+      });
+      const changed = edit ? edit(store, plan, rows) : false;
+      if (changed) store.put(plan);
+      snapshot = { plan, rows, changed };
+    };
+    tx.oncomplete = () => resolve(snapshot);
+    tx.onabort = () => reject(tx.error || new Error('Не удалось получить статистику'));
+  });
+}
+
+function saveMeasurement(db, plan, n, measurement, index) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction('sizes', 'readwrite');
     const sizes = tx.objectStore('sizes');
-    const read = sizes.get(n);
+    const key = statsKey(plan, n);
+    const control = sizes.get(PLAN_KEY);
+    const read = sizes.get(key);
     let row;
     read.onsuccess = () => {
-      row = read.result || emptyStats(n);
-      if (addMeasurement(row, measurement, index)) sizes.put(row);
+      const active = control.result || initialPlan();
+      if (generation(active, n) !== generation(plan, n) || (index !== null && active.revision !== plan.revision)) return;
+      row = read.result?.row || read.result || emptyStats(n);
+      if (addMeasurement(row, measurement, index)) sizes.put(Array.isArray(key) ? { n: key, row } : row);
     };
     tx.oncomplete = () => resolve(row);
     tx.onabort = () => reject(tx.error || new Error('Запись статистики прервана'));
@@ -99,31 +141,38 @@ function seriesField(n, index) {
 
 function initStatistics(maxCities) {
   const minCities = Number(el('count').min);
-  const rows = Array.from({ length: maxCities - minCities + 1 }, (_, i) => emptyStats(minCities + i));
-  const recordedFields = new WeakSet();
+  const cityCounts = Array.from({ length: maxCities - minCities + 1 }, (_, i) => minCities + i);
+  let rows = cityCounts.map(emptyStats), plan = initialPlan();
+  const recordedFields = new WeakMap();
   const average = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 3 });
   const database = openStatsDatabase();
   let ready = false, running = false, task = null, worker = null, localRunner = null;
-  let exporting = false;
+  let exporting = false, changing = false;
   let error = '', paintTimer = null;
 
   function merge(row) {
     const i = row.n - minCities, old = rows[i];
     if (old && row.series + row.manual >= old.series + old.manual) rows[i] = row;
   }
-  async function readSavedRows() {
-    const db = await database;
-    return new Promise((resolve, reject) => {
-      const request = db.transaction('sizes').objectStore('sizes').getAll();
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-  }
-  async function refresh() {
-    const records = await readSavedRows();
-    records.forEach(merge);
+  function applySnapshot(snapshot) {
+    if (snapshot.plan.revision < plan.revision) return;
+    if (snapshot.plan.revision !== plan.revision) {
+      running = false;
+      task = null;
+      if (worker) { worker.onmessage = worker.onerror = null; worker.terminate(); worker = null; }
+      if (localRunner) { localRunner({ type: 'pause' }); localRunner = null; }
+      plan = snapshot.plan;
+      rows = snapshot.rows;
+      el('export-status').hidden = true;
+    } else snapshot.rows.forEach(merge);
     ready = true;
     paint();
+  }
+  async function refresh() {
+    applySnapshot(await readStatistics(await database, cityCounts));
+  }
+  function remaining(row) {
+    return row.series < (plan.starts[row.n] || 0) + SERIES_TARGET;
   }
   function share(wins, total) {
     return total ? average.format(100 * wins / total) + ' %' : '—';
@@ -133,21 +182,27 @@ function initStatistics(maxCities) {
     paintTimer = null;
     el('stats-tab').textContent = running ? 'Сбор сложности · идёт' : 'Сбор сложности';
     if (el('stats-panel').hidden) return;
-    el('stats-export').disabled = !ready || exporting;
+    const busy = !ready || changing;
+    el('stats-export').disabled = busy || exporting;
+    el('stats-reset').disabled = busy || running || exporting;
+    el('series-add').disabled = busy || running || exporting;
     const metric = el('stats-metric').value;
-    const completed = rows.reduce((s, row) => s + row.series, 0);
+    const batch = plan.only === null ? rows : [rows[plan.only - minCities]];
+    const completed = batch.reduce((s, row) => s + row.series - (plan.starts[row.n] || 0), 0);
     const total = rows.reduce((s, row) => s + row.series + row.manual, 0);
     const byBound = rows.reduce((s, row) => s + row.byBound, 0);
-    const target = rows.length * SERIES_TARGET;
+    const target = batch.length * SERIES_TARGET;
     el('series-progress').max = target;
     el('series-progress').value = completed;
     el('series-total').textContent = integer.format(completed) + ' / ' + integer.format(target);
-    el('series-start').disabled = !ready || running || completed === target;
+    el('series-start').disabled = busy || running || !rows.some(remaining);
     el('series-stop').disabled = !running;
-    el('series-start-label').textContent = task || completed ? 'Продолжить серию' : 'Запустить серию';
+    el('series-start-label').textContent = plan.only !== null && completed >= target ? 'Продолжить общую серию'
+      : task || completed ? 'Продолжить серию' : 'Запустить серию';
     const position = task ? ' · ' + task.n + ' гор., поле ' + (task.index + 1) + ' · ' + integer.format(task.steps) +
       ' шагов · порог очереди ' + integer.format(task.queueLimit) : '';
-    el('series-state').textContent = (!ready ? 'Ожидание хранилища' : completed === target ? 'Серия завершена' : running ? 'Идёт сбор' : task || completed ? 'Остановлено' : 'Готово к запуску') + position;
+    const scope = plan.only !== null && !task ? ' · ' + plan.only + ' гор.' : '';
+    el('series-state').textContent = (!ready ? 'Ожидание хранилища' : completed >= target ? 'Серия завершена' : running ? 'Идёт сбор' : task || completed ? 'Остановлено' : 'Готово к запуску') + scope + position;
     el('series-error').hidden = !error;
     el('series-error').textContent = error;
     el('overall-bound').textContent = 'Всего завершено по границе ' + share(byBound, total) + ' (' + integer.format(byBound) + ' из ' + integer.format(total) + ').';
@@ -156,7 +211,12 @@ function initStatistics(maxCities) {
       const count = row.series + row.manual, m = row.metrics[metric];
       const values = m ? [m.min, m.max, m.sum / count].map(v => average.format(v)) : ['—', '—', '—'];
       return '<tr><th scope="row">' + row.n + '</th><td>' + integer.format(row.series) + '</td><td>' + integer.format(row.manual) + '</td>' +
-        values.map(v => '<td>' + v + '</td>').join('') + '<td title="' + row.byBound + ' из ' + count + '">' + share(row.byBound, count) + '</td></tr>';
+        values.map(v => '<td>' + v + '</td>').join('') + '<td title="' + row.byBound + ' из ' + count + '">' + share(row.byBound, count) + '</td>' +
+        '<td class="row-actions">' + ['restart', 'add'].map(action => {
+          const label = action === 'restart' ? 'Заново' : 'Ещё 1 000';
+          return '<button class="outline" data-action="' + action + '" data-n="' + row.n + '" aria-label="' + label + ', ' + row.n + ' городов"' +
+            (busy || running || exporting ? ' disabled' : '') + '>' + label + '</button>';
+        }).join(' ') + '</td></tr>';
     }).join('');
   }
   function schedulePaint() {
@@ -169,8 +229,12 @@ function initStatistics(maxCities) {
     paint();
   }
   async function commit(n, measurement, index) {
+    const started = plan;
     const db = await database;
-    merge(await saveMeasurement(db, n, measurement, index));
+    const saved = await saveMeasurement(db, started, n, measurement, index);
+    if (!saved) { await refresh(); return; }
+    if (plan.revision !== started.revision) return;
+    merge(saved);
     schedulePaint();
   }
   async function finishTask(current) {
@@ -178,9 +242,11 @@ function initStatistics(maxCities) {
     current.saving = true;
     try {
       await commit(current.n, current.result, current.index);
+      if (task !== current) return;
       task = null;
       if (running) nextField();
     } catch {
+      if (task !== current) return;
       current.saving = false;
       storageError();
     }
@@ -217,10 +283,63 @@ function initStatistics(maxCities) {
     else localRunner(message);
   }
   function nextField() {
-    const row = rows.find(r => r.series < SERIES_TARGET);
+    const row = rows.find(r => (plan.only === null || plan.only === r.n) && remaining(r));
     if (!row) { running = false; paint(); return; }
     task = { n: row.n, index: row.series, points: seriesField(row.n, row.series), steps: 0, queueLimit: INITIAL_QUEUE_LIMIT };
     command({ type: 'start', points: task.points });
+  }
+
+  const updates = typeof BroadcastChannel === 'function' ? new BroadcastChannel('atlas-route-series') : null;
+  if (updates) updates.onmessage = () => refresh().catch(storageError);
+
+  async function changeSeries(action, n = null) {
+    if (!ready || running || changing || exporting) return;
+    if (action === 'reset' || action === 'restart') {
+      const affected = n === null ? rows : [rows[n - minCities]];
+      const series = affected.reduce((sum, row) => sum + row.series, 0);
+      const manual = affected.reduce((sum, row) => sum + row.manual, 0);
+      const question = n === null ? 'Сбросить всю статистику?' : 'Начать заново для ' + n + ' городов?';
+      const detail = 'Серийных результатов к удалению: ' + integer.format(series) + ', ручных: ' + integer.format(manual) + '.';
+      if (!window.confirm(question + '\n' + detail)) return;
+    }
+    const revision = plan.revision;
+    changing = true;
+    error = '';
+    paint();
+    try {
+      const snapshot = await readStatistics(await database, cityCounts, (store, next, saved) => {
+        if (next.revision !== revision) return false;
+        next.revision++;
+        next.only = n;
+        if (action === 'reset') {
+          store.clear();
+          next.resetAt = next.revision;
+          next.starts = {};
+          next.cleared = {};
+          saved.forEach((row, i) => { saved[i] = emptyStats(row.n); });
+        } else if (action === 'restart') {
+          store.delete(statsKey(next, n));
+          next.cleared[n] = next.revision;
+          next.starts[n] = 0;
+          saved[n - minCities] = emptyStats(n);
+        } else if (action === 'add') {
+          for (const row of saved) {
+            if (n === null || n === row.n) next.starts[row.n] = row.series;
+          }
+        }
+        return true;
+      });
+      applySnapshot(snapshot);
+      if (snapshot.changed && plan.revision === snapshot.plan.revision) {
+        updates?.postMessage(plan.revision);
+        if (action !== 'reset') startSeries();
+      } else error = 'План серии изменён в другой вкладке. Данные обновлены.';
+    } catch {
+      error = 'Не удалось изменить серию в локальном хранилище. Попробуй ещё раз.';
+    } finally {
+      changing = false;
+      paint();
+    }
   }
 
   function selectMode(stats) {
@@ -235,14 +354,13 @@ function initStatistics(maxCities) {
   el('stats-metric').innerHTML = Object.entries(statsMetrics).map(([key, m]) => '<option value="' + key + '">' + m[0] + '</option>').join('');
   el('stats-metric').onchange = paint;
   el('stats-export').onclick = async () => {
-    if (!ready || exporting) return;
+    if (!ready || exporting || changing) return;
     exporting = true;
-    el('stats-export').disabled = true;
+    paint();
     const status = el('export-status');
     try {
-      const records = await readSavedRows();
-      const saved = new Map(records.map(row => [row.n, row]));
-      const report = statsReport(rows.map(({ n }) => saved.get(n) || emptyStats(n)));
+      const snapshot = await readStatistics(await database, cityCounts);
+      const report = statsReport(snapshot.rows, snapshot.plan);
       const file = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json;charset=utf-8' });
       const url = URL.createObjectURL(file);
       const link = document.createElement('a');
@@ -258,17 +376,27 @@ function initStatistics(maxCities) {
     } finally {
       exporting = false;
       status.hidden = false;
-      el('stats-export').disabled = !ready;
+      paint();
     }
   };
-  el('series-start').onclick = () => {
-    if (running || !ready) return;
+  function startSeries() {
     running = true;
     error = '';
     if (!task) nextField();
     else if (task.result) finishTask(task);
     else command({ type: 'resume' });
     paint();
+  }
+  el('series-start').onclick = () => {
+    if (running || !ready || changing) return;
+    if (plan.only !== null && !remaining(rows[plan.only - minCities])) changeSeries('resume-all');
+    else startSeries();
+  };
+  el('series-add').onclick = () => changeSeries('add');
+  el('stats-reset').onclick = () => changeSeries('reset');
+  el('stats-rows').onclick = event => {
+    const button = event.target.closest('button[data-action]');
+    if (button) changeSeries(button.dataset.action, Number(button.dataset.n));
   };
   el('series-stop').onclick = () => {
     running = false;
@@ -279,10 +407,15 @@ function initStatistics(maxCities) {
   refresh().catch(storageError);
   return {
     recordManual(points, run) {
-      if (recordedFields.has(points)) return;
-      recordedFields.add(points);
+      if (!ready) {
+        refresh().then(() => this.recordManual(points, run)).catch(storageError);
+        return;
+      }
+      const version = generation(plan, points.length);
+      if (recordedFields.get(points) === version) return;
+      recordedFields.set(points, version);
       commit(points.length, measureRun(run), null).catch(() => {
-        recordedFields.delete(points);
+        if (recordedFields.get(points) === version) recordedFields.delete(points);
         storageError();
       });
     }

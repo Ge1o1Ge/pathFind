@@ -63,6 +63,7 @@ input[type=range]::-moz-range-thumb{width:11px;height:11px;border:2px solid whit
 .series-body p,.stats-table>p{font-size:13px;line-height:1.5;color:var(--muted)}
 .series-body progress{display:block;width:100%;height:8px;accent-color:var(--blue);margin:15px 0}
 .series-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.series-actions .primary{flex:none}
+.row-actions .outline{min-height:30px;padding:4px 8px;font-size:12px}
 #series-total,#series-state{font:12px var(--mono);color:#52647a}.series-body #series-error{color:#923f24}
 .stats-table{overflow:hidden}.stats-table>p{margin:12px 20px}.table-scroll{overflow-x:auto}
 .stats-table table{width:100%;border-collapse:collapse;font:13px var(--mono);text-align:right}
