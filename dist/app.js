@@ -13,25 +13,15 @@ let points, search, mode, bestView, frame = 0, lastTime = 0, credit = 0, mapSize
 let balanceView = false;
 const maxCities = Number(el('count').max);
 const statistics = initStatistics(maxCities);
-
-function randomField(count, random = Math.random) {
-  const cities = [];
-  while (cities.length < count) {
-    let pick, largest = -1;
-    for (let trial = 0; trial < 8; trial++) {
-      const p = { x: 4 + Math.floor(random() * 93), y: 3 + Math.floor(random() * 45) };
-      const gap = cities.reduce((min, q) => Math.min(min, (p.x - q.x) ** 2 + (p.y - q.y) ** 2), Infinity);
-      if (gap > largest) { pick = p; largest = gap; }
-    }
-    if (largest > 0) cities.push(pick);
-  }
-  return cities;
-}
+const comparison = initComparison(() => points);
+const clockNumber = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 });
+const elapsed = ms => ms < 1000 ? clockNumber.format(ms) + ' мс' : clockNumber.format(ms / 1000) + ' с';
 
 function newField(countFinished = true) {
   if (!el('count').reportValidity()) return false;
   cancelAnimationFrame(frame);
   points = randomField(el('count').valueAsNumber);
+  comparison.clear();
   search = new RouteSearch(points);
   mode = 'ready';
   bestView = false;
@@ -92,14 +82,22 @@ function render() {
   drawMap(s);
   drawConvergence(chart, search, balanceView);
   el('coverage').textContent = new Set(s.paths.flat()).size + ' / ' + points.length + ' городов';
-  el('steps').textContent = integer.format(search.steps);
+  el('steps').textContent = integer.format(search.mainSteps);
   el('crossing-cuts').textContent = integer.format(search.crossingCuts);
   el('dead-end-cuts').textContent = integer.format(search.deadEndCuts);
   el('queue-limit').textContent = integer.format(search.queueLimit);
   el('l1').textContent = distance.format(s.len[0]);
   el('l2').textContent = distance.format(s.len[1]);
   el('best').textContent = distance.format(search.best.len[0] + search.best.len[1]);
-  el('warmup-count').textContent = integer.format(search.warmupCount);
+  el('warmup-count').textContent = search.warmupCount + ' / ' + search.warmupLimit;
+  el('warmup-candidates').textContent = integer.format(search.warmupCandidates);
+  el('insertion-checks').textContent = integer.format(search.insertionChecks);
+  el('two-opt-checks').textContent = integer.format(search.twoOptChecks);
+  el('greedy-checks').textContent = integer.format(search.greedyChecks);
+  el('prep-time').textContent = elapsed(search.preparationMs);
+  el('warmup-time').textContent = elapsed(search.warmupMs);
+  el('main-time').textContent = elapsed(search.searchMs);
+  el('total-time').textContent = elapsed(search.totalMs);
   el('status').dataset.mode = mode;
   if (el('status').textContent !== modeNames[mode]) el('status').textContent = modeNames[mode];
   el('note').textContent = search.note;
@@ -130,13 +128,9 @@ function animate(now) {
   lastTime = now;
   const turbo = rate === Infinity;
   if (!turbo) credit += delta * rate / 1000;
-  const before = search.steps;
-  const deadline = performance.now() + 8;
-  while (!search.done && (turbo || credit >= 1) && performance.now() < deadline) {
-    search.step();
-    if (!turbo) credit--;
-  }
-  if (search.steps !== before) afterStep();
+  const advanced = search.advance(turbo ? Infinity : Math.floor(credit), 8);
+  if (!turbo) credit -= advanced;
+  if (advanced) afterStep();
   if (mode === 'running') frame = requestAnimationFrame(animate);
 }
 

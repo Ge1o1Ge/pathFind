@@ -49,6 +49,7 @@ input[type=range]::-moz-range-thumb{width:11px;height:11px;border:2px solid whit
 .metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.metric{padding:15px 17px}.metric>span{gap:8px;font-size:12px;color:#536278;font-weight:600}.metric svg{width:16px;height:16px}.metric strong{display:block;font:600 clamp(22px,2.3vw,33px)/1.2 var(--mono);letter-spacing:-1.7px;margin:9px 0 4px}.metric small{font-size:11px;color:var(--muted)}.blue-ink,.record strong,.record svg{color:var(--blue)}.orange-ink{color:var(--orange)}.record{background:#f0f4ff;border-color:#cfdbfb}
 .note{margin:12px 2px 0;color:#586980;font-size:12px;min-height:18px;line-height:1.5}
 .convergence{margin:0 0 14px;overflow:hidden}
+.work-metrics{margin-top:12px}.work-metrics .metric strong{font-size:clamp(17px,2vw,25px);letter-spacing:-.7px}.comparison{margin-top:14px}
 .convergence .panel-head{flex-wrap:wrap}
 .chart-body{padding:0 18px 15px}
 #chart-caption{margin:12px 0 8px;font-size:13px;color:var(--muted);line-height:1.5}

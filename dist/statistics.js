@@ -2,8 +2,21 @@
 
 const SERIES_TARGET = 1000;
 const PLAN_KEY = 'series-plan';
+const workMetrics = {
+  mainSteps: ['Состояния основного поиска', 'Сколько состояний двух ветвей было обработано до доказательства оптимума. Разминка сюда не входит.'],
+  totalMs: ['Весь расчёт, мс', 'Подготовка + разминка + основной поиск до доказательства оптимума. Без отрисовки, пауз и ожидания между порциями расчёта.'],
+  preparationMs: ['Подготовка, мс', 'Расстояния, геометрия, начальные структуры и первая нижняя оценка.'],
+  warmupMs: ['Разминка, мс', 'Всё построение начальных циклов: жадный маршрут, вставки, поиск соседей 2-opt и сохранение рекорда.'],
+  searchMs: ['Основной поиск, мс', 'Активное время перебора и подтверждения оптимума после разминки.'],
+  warmupCycles: ['Разные циклы разминки', 'Сколько полных циклов принято в разминке. Не более n − 2, включая первый.'],
+  warmupCandidates: ['Кандидаты разминки', 'Сумма проверенных позиций вставки и рассмотренных пар рёбер 2-opt, включая отвергнутые.'],
+  insertionChecks: ['Позиции вставки', 'Каждое вычисление прироста длины при попытке вставить город.'],
+  twoOptChecks: ['Пары рёбер 2-opt', 'Каждая рассмотренная пара несмежных рёбер, включая проверки без улучшения и повторы.'],
+  greedyChecks: ['Проверки жадного старта', 'Сколько раз при построении первого цикла проверялось, свободен ли очередной город. Считаются отдельно от вставок и пар 2-opt.']
+};
 const statsMetrics = {
-  steps: ['Шаги до завершения', 'Каждый проверенный цикл разминки и каждая проверенная пара ветвей основного поиска дают по одному шагу.'],
+  ...workMetrics,
+  steps: ['Шаги до завершения (прежняя шкала)', 'Для сравнения со старыми сериями: шаг — принятый цикл разминки или состояние основного поиска. Это разные по стоимости операции.'],
   bestStep: ['Шаг нахождения оптимума', 'Номер шага, на котором впервые найден итоговый рекорд. Первый цикл разминки — шаг 1.'],
   proofSteps: ['Шаги после нахождения оптимума', 'Сколько кандидатов пришлось проверить после последнего улучшения.'],
   ratio: ['Отношение ℓ₁ / ℓ₂', 'Длина первой ветви относительно второй в итоговом оптимальном цикле.'],
@@ -36,13 +49,13 @@ function statsReport(rows, plan = initialPlan()) {
     const metrics = {};
     for (const key of Object.keys(statsMetrics)) {
       const m = row.metrics[key];
-      metrics[key] = m ? { ...m, mean: m.sum / samples.completed } : null;
+      metrics[key] = m ? { ...m, mean: m.sum / (m.samples ?? samples.completed) } : null;
     }
     const batchStart = plan.starts[row.n] || 0;
     return { n: row.n, ...samples, batchStart, seriesTarget: batchStart + SERIES_TARGET, metrics };
   });
   return {
-    formatVersion: 1, exportedAt: new Date().toISOString(), seriesTargetPerSize: SERIES_TARGET,
+    formatVersion: 1, algorithm: 'khvastuns', exportedAt: new Date().toISOString(), seriesTargetPerSize: SERIES_TARGET,
     metricLabels: Object.fromEntries(Object.entries(statsMetrics).map(([key, [label]]) => [key, label])),
     totals: counts(series, manual, byBound, withWarmupSteps), sizes
   };
@@ -55,13 +68,15 @@ function addMeasurement(row, measurement, index) {
   else row.series++;
   if (measurement.byBound) row.byBound++;
   if (measurement.includesWarmupSteps) row.withWarmupSteps = (row.withWarmupSteps || 0) + 1;
-  for (const [name, value] of Object.entries(measurement.values)) {
+  for (const [name, value] of Object.entries(measuredValues(measurement))) {
     const metric = row.metrics[name];
     if (metric) {
       metric.min = Math.min(metric.min, value);
       metric.max = Math.max(metric.max, value);
       metric.sum += value;
     } else row.metrics[name] = { min: value, max: value, sum: value };
+    // В старых прогонах этих замеров нет: они не входят в знаменатель среднего.
+    if (name in workMetrics) row.metrics[name].samples = (row.metrics[name].samples || 0) + 1;
   }
   return true;
 }
@@ -130,15 +145,6 @@ function saveMeasurement(db, plan, n, measurement, index) {
   });
 }
 
-function seriesField(n, index) {
-  // Номер опыта задаёт поле: возобновление серии не заменяет тяжёлый пример другим.
-  let seed = Math.imul(n, 0x85ebca6b) ^ Math.imul(index + 1, 0x9e3779b1);
-  return randomField(n, () => {
-    seed = (Math.imul(1664525, seed) + 1013904223) >>> 0;
-    return seed / 4294967296;
-  });
-}
-
 function initStatistics(maxCities) {
   const minCities = Number(el('count').min);
   const cityCounts = Array.from({ length: maxCities - minCities + 1 }, (_, i) => minCities + i);
@@ -199,8 +205,8 @@ function initStatistics(maxCities) {
     el('series-stop').disabled = !running;
     el('series-start-label').textContent = plan.only !== null && completed >= target ? 'Продолжить общую серию'
       : task || completed ? 'Продолжить серию' : 'Запустить серию';
-    const position = task ? ' · ' + task.n + ' гор., поле ' + (task.index + 1) + ' · ' + integer.format(task.steps) +
-      ' шагов · порог очереди ' + integer.format(task.queueLimit) : '';
+    const position = task ? ' · ' + task.n + ' гор., поле ' + (task.index + 1) + ' · состояний поиска: ' + integer.format(task.mainSteps) +
+      ' · порог очереди ' + integer.format(task.queueLimit) : '';
     const scope = plan.only !== null && !task ? ' · ' + plan.only + ' гор.' : '';
     el('series-state').textContent = (!ready ? 'Ожидание хранилища' : completed >= target ? 'Серия завершена' : running ? 'Идёт сбор' : task || completed ? 'Остановлено' : 'Готово к запуску') + scope + position;
     el('series-error').hidden = !error;
@@ -209,9 +215,10 @@ function initStatistics(maxCities) {
     el('metric-description').textContent = statsMetrics[metric][1];
     el('stats-rows').innerHTML = rows.map(row => {
       const count = row.series + row.manual, m = row.metrics[metric];
-      const values = m ? [m.min, m.max, m.sum / count].map(v => average.format(v)) : ['—', '—', '—'];
+      const measured = m ? m.samples ?? count : 0;
+      const values = m ? [m.min, m.max, m.sum / measured].map(v => average.format(v)) : ['—', '—', '—'];
       return '<tr><th scope="row">' + row.n + '</th><td>' + integer.format(row.series) + '</td><td>' + integer.format(row.manual) + '</td>' +
-        values.map(v => '<td>' + v + '</td>').join('') + '<td title="' + row.byBound + ' из ' + count + '">' + share(row.byBound, count) + '</td>' +
+        '<td>' + integer.format(measured) + '</td>' + values.map(v => '<td>' + v + '</td>').join('') + '<td title="' + row.byBound + ' из ' + count + '">' + share(row.byBound, count) + '</td>' +
         '<td class="row-actions">' + ['restart', 'add'].map(action => {
           const label = action === 'restart' ? 'Заново' : 'Ещё 1 000';
           return '<button class="outline" data-action="' + action + '" data-n="' + row.n + '" aria-label="' + label + ', ' + row.n + ' городов"' +
@@ -253,7 +260,7 @@ function initStatistics(maxCities) {
   }
   function receive(message) {
     if (!task) return;
-    task.steps = message.steps;
+    task.mainSteps = message.mainSteps;
     task.queueLimit = message.queueLimit ?? INITIAL_QUEUE_LIMIT;
     if (message.done) {
       task.result = message.measurement;
@@ -285,7 +292,7 @@ function initStatistics(maxCities) {
   function nextField() {
     const row = rows.find(r => (plan.only === null || plan.only === r.n) && remaining(r));
     if (!row) { running = false; paint(); return; }
-    task = { n: row.n, index: row.series, points: seriesField(row.n, row.series), steps: 0, queueLimit: INITIAL_QUEUE_LIMIT };
+    task = { n: row.n, index: row.series, points: seriesField(row.n, row.series), mainSteps: 0, queueLimit: INITIAL_QUEUE_LIMIT };
     command({ type: 'start', points: task.points });
   }
 

@@ -4,11 +4,15 @@ const MAX_SEEN_STATES = 250_000;
 const INITIAL_QUEUE_LIMIT = 4_000;
 const MAX_QUEUE_LIMIT = 16_000;
 const QUEUE_STALL_STEPS = 25_000;
-const WARMUP_CYCLES = 10;
 
 function balanceRatio([l1, l2]) {
   const half = (l1 + l2) / 2;
   return ((half / l1) ** 3 + (half / l2) ** 3) / 2;
+}
+
+function routeDistance(p, q, integerWeights = false) {
+  const dx = p.x - q.x, dy = p.y - q.y;
+  return integerWeights ? Math.ceil(Math.sqrt((dx * dx + dy * dy) * 1_000_000)) : Math.hypot(dx, dy);
 }
 
 function cycleKey(tour) {
@@ -64,9 +68,16 @@ class CandidateQueue {
 }
 
 class RouteSearch {
-  constructor(points) {
+  constructor(points, warmupLimit = points.length - 2, integerWeights = false) {
+    const started = performance.now();
     this.n = points.length;
-    this.dist = points.map(p => points.map(q => Math.hypot(p.x - q.x, p.y - q.y)));
+    this.warmupLimit = Math.min(this.n - 2, Math.max(0, Math.floor(warmupLimit)));
+    this.warmupCount = 0;
+    this.greedyChecks = 0;
+    this.insertionChecks = 0;
+    this.twoOptChecks = 0;
+    this.integerWeights = integerWeights;
+    this.dist = points.map(p => points.map(q => routeDistance(p, q, integerWeights)));
     this.turn = points.map(a => points.map(b => points.map(c => {
       const left = (b.x - a.x) * (c.y - a.y), right = (b.y - a.y) * (c.x - a.x);
       // При неуверенном знаке почти коллинеарной тройки сохраняем вариант.
@@ -100,24 +111,38 @@ class RouteSearch {
     this.seekingFirstCycle = true;
     this.done = false;
     this.finishReason = null;
+    this.steps = this.bestStep = 0;
+    this.best = null;
+    this.history = [];
+    this.bound = this.candidateBound(this.next);
+    const prepared = performance.now();
+    this.preparationMs = prepared - started;
+    if (this.warmupLimit) this.warmUp();
+    const warmed = this.warmupLimit ? performance.now() : prepared;
+    this.warmupMs = warmed - prepared;
+    this.note = this.best ? 'До основного поиска проверено циклов: ' + this.warmupCount + '. На карте — самый короткий из них.'
+      : 'Разминка отключена. Первый цикл построит основной поиск.';
+    this.current = this.best || this.next;
+    this.lastQueueProgress = this.steps;
+    this.nextCheckpoint = this.steps + 1;
+    this.recordProgress();
+    this.searchMs = performance.now() - warmed;
+  }
+  get mainSteps() { return this.steps - this.warmupCount; }
+  get warmupCandidates() { return this.insertionChecks + this.twoOptChecks; }
+  get totalMs() { return this.preparationMs + this.warmupMs + this.searchMs; }
+  greedySeed() {
     let seed = this.next;
     while (seed.free) {
       const side = this.shorter(seed);
       const end = seed.paths[side].at(-1);
-      const city = this.near[end].find(i => seed.free & (1 << i));
+      const city = this.near[end].find(i => {
+        this.greedyChecks++;
+        return seed.free & (1 << i);
+      });
       seed = this.extend(seed, side, city);
     }
-    this.best = this.close(seed);
-    this.steps = 1;
-    this.bestStep = 1;
-    this.bound = this.candidateBound(this.next);
-    this.history = [{ step: this.steps, len: this.best.len, bound: this.bound }];
-    this.warmUp();
-    this.note = 'До основного поиска проверено циклов: ' + this.warmupCount + '. На карте — самый короткий из них.';
-    this.current = this.best;
-    this.lastQueueProgress = this.steps;
-    this.nextCheckpoint = this.steps + 1;
-    this.recordProgress();
+    return this.close(seed);
   }
   insertionTour() {
     const tour = [this.a, this.b];
@@ -125,6 +150,7 @@ class RouteSearch {
       if (city === this.a || city === this.b) continue;
       let position = 1, leastExtra = Infinity;
       for (let i = 0; i < tour.length; i++) {
+        this.insertionChecks++;
         const a = tour[i], b = tour[(i + 1) % tour.length];
         const extra = this.dist[a][city] + this.dist[city][b] - this.dist[a][b];
         if (extra < leastExtra) { position = i + 1; leastExtra = extra; }
@@ -138,6 +164,7 @@ class RouteSearch {
     for (let i = 0; i < this.n - 2; i++) {
       for (let j = i + 2; j < this.n; j++) {
         if (i === 0 && j === this.n - 1) continue;
+        this.twoOptChecks++;
         const a = tour[i], b = tour[i + 1], c = tour[j], d = tour[(j + 1) % this.n];
         const change = this.dist[a][c] + this.dist[b][d] - this.dist[a][b] - this.dist[c][d];
         if (change >= bestChange) continue;
@@ -150,6 +177,10 @@ class RouteSearch {
     return next;
   }
   warmUp() {
+    this.best = this.greedySeed();
+    this.steps = this.bestStep = this.warmupCount = 1;
+    this.history.push({ step: this.steps, len: this.best.len, bound: this.bound });
+    if (this.warmupLimit === 1) return;
     const [out, back] = this.best.paths;
     const seed = out.concat(back.slice(1, -1).reverse());
     const visited = new Set([cycleKey(seed)]);
@@ -171,7 +202,7 @@ class RouteSearch {
     };
     const inserted = this.insertionTour();
     if (!visited.has(cycleKey(inserted))) consider(inserted);
-    while (trail.length && visited.size < WARMUP_CYCLES) {
+    while (trail.length && visited.size < this.warmupLimit) {
       const next = this.warmupNeighbor(trail.at(-1), visited);
       if (next) consider(next);
       else trail.pop();
@@ -201,6 +232,12 @@ class RouteSearch {
         if (turn[a] * turn[b] >= 0) continue;
         const other = this.turn[a][b];
         if (other[from] * other[to] < 0) {
+          // В целой метрике округление может убрать выигрыш от распутывания.
+          // Запрещаем пересечение лишь когда оба способа замены строго дешевле.
+          if (this.integerWeights) {
+            const d = this.dist, crossed = d[from][to] + d[a][b];
+            if (crossed <= Math.max(d[from][a] + d[to][b], d[from][b] + d[to][a])) continue;
+          }
           blocked[a] |= 1 << b;
           blocked[b] |= 1 << a;
         }
@@ -293,7 +330,7 @@ class RouteSearch {
     return s.bound;
   }
   recordProgress() {
-    const total = this.best.len[0] + this.best.len[1];
+    const total = this.best ? this.best.len[0] + this.best.len[1] : Infinity;
     const exhausted = !this.next && !this.pending && !this.stack.length;
     if (exhausted) {
       this.bound = total;
@@ -316,7 +353,7 @@ class RouteSearch {
       this.nextCheckpoint += Math.max(8, Math.ceil((this.steps - this.warmupCount) / 8));
     }
     // Между контрольными точками новый рекорд тоже может достичь уже известной границы.
-    if (this.bound >= total) {
+    if (this.best && this.bound >= total) {
       this.done = true;
       this.finishReason = exhausted ? 'exhausted' : 'bound';
       this.bound = total;
@@ -327,7 +364,7 @@ class RouteSearch {
       for (const queue of this.queues) queue.items.length = 0;
     }
     const previous = this.history.at(-1);
-    if (!previous || previous.len !== this.best.len || previous.bound !== this.bound) {
+    if (this.best && (!previous || previous.len !== this.best.len || previous.bound !== this.bound)) {
       this.history.push({ step: this.steps, len: this.best.len, bound: this.bound });
     }
   }
@@ -369,15 +406,24 @@ class RouteSearch {
     this.next = null;
     return s;
   }
-  step() {
-    if (this.done) return;
+  advance(limit = Infinity, sliceMs = Infinity) {
+    if (limit < 1 || this.done) return 0;
+    const start = performance.now(), deadline = start + sliceMs, before = this.steps;
+    do {
+      this.processState();
+    } while (!this.done && this.steps - before < limit && (sliceMs === Infinity || performance.now() < deadline));
+    this.searchMs += performance.now() - start;
+    return this.steps - before;
+  }
+  step() { return this.advance(1); }
+  processState() {
     const s = this.choose();
     s.forks[s.side]?.pending.delete(s);
     this.steps++;
     this.current = s;
     const [u, v] = s.paths.map(path => path.at(-1));
     const g = s.len[0] + s.len[1];
-    const record = this.best.len[0] + this.best.len[1];
+    const record = this.best ? this.best.len[0] + this.best.len[1] : Infinity;
     const key = (s.free * this.n + Math.min(u, v)) * this.n + Math.max(u, v);
     const previous = this.seen.get(key);
     if (!s.free) {
