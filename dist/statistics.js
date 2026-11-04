@@ -2,8 +2,8 @@
 
 const SERIES_TARGET = 1000;
 const statsMetrics = {
-  steps: ['Шаги до завершения', 'Все проверенные пары ветвей до подтверждения минимума.'],
-  bestStep: ['Шаг нахождения оптимума', 'Шаг последнего улучшения рекорда. Ноль означает, что оптимальным был начальный цикл.'],
+  steps: ['Шаги до завершения', 'Каждый проверенный цикл разминки и каждая проверенная пара ветвей основного поиска дают по одному шагу.'],
+  bestStep: ['Шаг нахождения оптимума', 'Номер шага, на котором впервые найден итоговый рекорд. Первый цикл разминки — шаг 1.'],
   proofSteps: ['Шаги после нахождения оптимума', 'Сколько кандидатов пришлось проверить после последнего улучшения.'],
   ratio: ['Отношение ℓ₁ / ℓ₂', 'Длина первой ветви относительно второй в итоговом оптимальном цикле.'],
   balance: ['Короткая / длинная, %', 'Отношение длин ветвей оптимального цикла без учёта их цвета. При равенстве получается 100 %.'],
@@ -21,16 +21,17 @@ function emptyStats(n) {
 }
 
 function statsReport(rows) {
-  function counts(series, manual, byBound) {
+  function counts(series, manual, byBound, withWarmupSteps) {
     const completed = series + manual;
-    return { series, manual, completed, byBound, byBoundPercent: completed ? 100 * byBound / completed : null };
+    return { series, manual, completed, withWarmupSteps, byBound, byBoundPercent: completed ? 100 * byBound / completed : null };
   }
-  let series = 0, manual = 0, byBound = 0;
+  let series = 0, manual = 0, byBound = 0, withWarmupSteps = 0;
   const sizes = rows.map(row => {
     series += row.series;
     manual += row.manual;
     byBound += row.byBound;
-    const samples = counts(row.series, row.manual, row.byBound);
+    withWarmupSteps += row.withWarmupSteps || 0;
+    const samples = counts(row.series, row.manual, row.byBound, row.withWarmupSteps || 0);
     const metrics = {};
     for (const key of Object.keys(statsMetrics)) {
       const m = row.metrics[key];
@@ -41,7 +42,7 @@ function statsReport(rows) {
   return {
     formatVersion: 1, exportedAt: new Date().toISOString(), seriesTargetPerSize: SERIES_TARGET,
     metricLabels: Object.fromEntries(Object.entries(statsMetrics).map(([key, [label]]) => [key, label])),
-    totals: counts(series, manual, byBound), sizes
+    totals: counts(series, manual, byBound, withWarmupSteps), sizes
   };
 }
 
@@ -51,6 +52,7 @@ function addMeasurement(row, measurement, index) {
   if (index === null) row.manual++;
   else row.series++;
   if (measurement.byBound) row.byBound++;
+  if (measurement.includesWarmupSteps) row.withWarmupSteps = (row.withWarmupSteps || 0) + 1;
   for (const [name, value] of Object.entries(measurement.values)) {
     const metric = row.metrics[name];
     if (metric) {
@@ -143,7 +145,8 @@ function initStatistics(maxCities) {
     el('series-start').disabled = !ready || running || completed === target;
     el('series-stop').disabled = !running;
     el('series-start-label').textContent = task || completed ? 'Продолжить серию' : 'Запустить серию';
-    const position = task ? ' · ' + task.n + ' гор., поле ' + (task.index + 1) + ' · ' + integer.format(task.steps) + ' шагов' : '';
+    const position = task ? ' · ' + task.n + ' гор., поле ' + (task.index + 1) + ' · ' + integer.format(task.steps) +
+      ' шагов · порог очереди ' + integer.format(task.queueLimit) : '';
     el('series-state').textContent = (!ready ? 'Ожидание хранилища' : completed === target ? 'Серия завершена' : running ? 'Идёт сбор' : task || completed ? 'Остановлено' : 'Готово к запуску') + position;
     el('series-error').hidden = !error;
     el('series-error').textContent = error;
@@ -185,6 +188,7 @@ function initStatistics(maxCities) {
   function receive(message) {
     if (!task) return;
     task.steps = message.steps;
+    task.queueLimit = message.queueLimit ?? INITIAL_QUEUE_LIMIT;
     if (message.done) {
       task.result = message.measurement;
       finishTask(task);
@@ -215,7 +219,7 @@ function initStatistics(maxCities) {
   function nextField() {
     const row = rows.find(r => r.series < SERIES_TARGET);
     if (!row) { running = false; paint(); return; }
-    task = { n: row.n, index: row.series, points: seriesField(row.n, row.series), steps: 0 };
+    task = { n: row.n, index: row.series, points: seriesField(row.n, row.series), steps: 0, queueLimit: INITIAL_QUEUE_LIMIT };
     command({ type: 'start', points: task.points });
   }
 

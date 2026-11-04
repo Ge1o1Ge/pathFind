@@ -38,7 +38,7 @@ function drawConvergence(svg, run, balance) {
   }
   // Горизонтальный отрезок длится до фактического шага следующего изменения.
   function stairs(read) {
-    const path = [[x(0), y(read(rows[0]))]];
+    const path = [[x(rows[0].step), y(read(rows[0]))]];
     let last = read(rows[0]);
     for (const row of rows.slice(1)) {
       const value = read(row);
@@ -81,7 +81,6 @@ function drawConvergence(svg, run, balance) {
       ' · L = ' + distance.format(sum(row)) + ' · Нижняя граница = ' + distance.format(row.bound) + ' · Q = ' + number(balanceRatio(row.len));
     return '<rect x="' + x(row.step) + '" y="' + top + '" width="' + (edge - x(row.step)) + '" height="' + (bottom - top) + '" fill="transparent"><title>' + tip + '</title></rect>';
   });
-  if (!run.steps) axes.push(label((left + right) / 2, (top + bottom) / 2, 'Первый цикл · шаг 0', 'middle'));
   svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
   svg.innerHTML = axes.join('') + paths.join('') + hover.join('');
   document.getElementById('chart-values').innerHTML = legend.join('');

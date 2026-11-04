@@ -4,6 +4,7 @@ function measureRun(run) {
   const [l1, l2] = run.best.len;
   return {
     byBound: run.finishReason === 'bound',
+    includesWarmupSteps: true,
     values: {
       steps: run.steps, bestStep: run.bestStep, proofSteps: run.steps - run.bestStep,
       length: l1 + l2, l1, l2, ratio: l1 / l2,
@@ -21,15 +22,15 @@ function createSeriesRunner(report, sliceMs) {
     const deadline = performance.now() + sliceMs;
     while (!run.done && performance.now() < deadline) run.step();
     if (run.done) {
-      const measurement = measureRun(run);
+      const result = { done: true, steps: run.steps, queueLimit: run.queueLimit, measurement: measureRun(run) };
       run = null;
       timer = null;
-      report({ done: true, steps: measurement.values.steps, measurement });
+      report(result);
       return;
     }
     if (performance.now() - lastReport >= 250) {
       lastReport = performance.now();
-      report({ done: false, steps: run.steps });
+      report({ done: false, steps: run.steps, queueLimit: run.queueLimit });
     }
     timer = setTimeout(tick, 0);
   }
@@ -38,7 +39,7 @@ function createSeriesRunner(report, sliceMs) {
     if (message.type === 'pause') {
       clearTimeout(timer);
       timer = null;
-      if (run) report({ done: false, steps: run.steps });
+      if (run) report({ done: false, steps: run.steps, queueLimit: run.queueLimit });
       return;
     }
     if (message.type === 'start') run = new RouteSearch(message.points);

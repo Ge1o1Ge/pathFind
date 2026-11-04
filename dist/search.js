@@ -1,10 +1,21 @@
 'use strict';
 
 const MAX_SEEN_STATES = 250_000;
+const INITIAL_QUEUE_LIMIT = 4_000;
+const MAX_QUEUE_LIMIT = 16_000;
+const QUEUE_STALL_STEPS = 25_000;
+const WARMUP_CYCLES = 10;
 
 function balanceRatio([l1, l2]) {
   const half = (l1 + l2) / 2;
   return ((half / l1) ** 3 + (half / l2) ** 3) / 2;
+}
+
+function cycleKey(tour) {
+  // Все циклы начинаются в A. Обратный обход проходит по тем же рёбрам.
+  const tail = tour.slice(1);
+  if (tail[0] > tail.at(-1)) tail.reverse();
+  return tail.join(',');
 }
 
 class CandidateQueue {
@@ -78,18 +89,17 @@ class RouteSearch {
       free: ((1 << this.n) - 1) ^ (1 << this.a) ^ (1 << this.b), side: 0, cost: 0
     };
     this.queues = [new CandidateQueue(), new CandidateQueue()];
+    this.queueLimit = INITIAL_QUEUE_LIMIT;
     this.stack = [];
+    this.retryFirst = false;
     this.seen = new Map();
     this.trees = new Map();
-    this.steps = 0;
-    this.bestStep = 0;
     this.boundCuts = 0;
     this.crossingCuts = 0;
     this.deadEndCuts = 0;
     this.seekingFirstCycle = true;
     this.done = false;
     this.finishReason = null;
-    this.note = 'Начальный цикл построен по ближайшим свободным городам.';
     let seed = this.next;
     while (seed.free) {
       const side = this.shorter(seed);
@@ -98,11 +108,75 @@ class RouteSearch {
       seed = this.extend(seed, side, city);
     }
     this.best = this.close(seed);
-    this.current = this.best;
+    this.steps = 1;
+    this.bestStep = 1;
     this.bound = this.candidateBound(this.next);
-    this.history = [];
-    this.nextCheckpoint = 1;
+    this.history = [{ step: this.steps, len: this.best.len, bound: this.bound }];
+    this.warmUp();
+    this.note = 'До основного поиска проверено циклов: ' + this.warmupCount + '. На карте — самый короткий из них.';
+    this.current = this.best;
+    this.lastQueueProgress = this.steps;
+    this.nextCheckpoint = this.steps + 1;
     this.recordProgress();
+  }
+  insertionTour() {
+    const tour = [this.a, this.b];
+    for (const city of this.near[this.a].slice().reverse()) {
+      if (city === this.a || city === this.b) continue;
+      let position = 1, leastExtra = Infinity;
+      for (let i = 0; i < tour.length; i++) {
+        const a = tour[i], b = tour[(i + 1) % tour.length];
+        const extra = this.dist[a][city] + this.dist[city][b] - this.dist[a][b];
+        if (extra < leastExtra) { position = i + 1; leastExtra = extra; }
+      }
+      tour.splice(position, 0, city);
+    }
+    return tour;
+  }
+  warmupNeighbor(tour, visited) {
+    let next = null, bestChange = Infinity;
+    for (let i = 0; i < this.n - 2; i++) {
+      for (let j = i + 2; j < this.n; j++) {
+        if (i === 0 && j === this.n - 1) continue;
+        const a = tour[i], b = tour[i + 1], c = tour[j], d = tour[(j + 1) % this.n];
+        const change = this.dist[a][c] + this.dist[b][d] - this.dist[a][b] - this.dist[c][d];
+        if (change >= bestChange) continue;
+        const candidate = tour.slice(0, i + 1).concat(tour.slice(i + 1, j + 1).reverse(), tour.slice(j + 1));
+        if (visited.has(cycleKey(candidate))) continue;
+        next = candidate;
+        bestChange = change;
+      }
+    }
+    return next;
+  }
+  warmUp() {
+    const [out, back] = this.best.paths;
+    const seed = out.concat(back.slice(1, -1).reverse());
+    const visited = new Set([cycleKey(seed)]);
+    const trail = [seed];
+    const consider = tour => {
+      visited.add(cycleKey(tour));
+      trail.push(tour);
+      // Пересчитываем длины ветвей по самим рёбрам перед сохранением полного маршрута.
+      const split = tour.indexOf(this.b);
+      let state = this.next;
+      for (let i = 1; i <= split; i++) state = this.extend(state, 0, tour[i]);
+      for (let i = this.n - 1; i >= split; i--) state = this.extend(state, 1, tour[i]);
+      this.steps++;
+      if (state.len[0] + state.len[1] < this.best.len[0] + this.best.len[1]) {
+        this.best = state;
+        this.bestStep = this.steps;
+        this.history.push({ step: this.steps, len: state.len, bound: this.bound });
+      }
+    };
+    const inserted = this.insertionTour();
+    if (!visited.has(cycleKey(inserted))) consider(inserted);
+    while (trail.length && visited.size < WARMUP_CYCLES) {
+      const next = this.warmupNeighbor(trail.at(-1), visited);
+      if (next) consider(next);
+      else trail.pop();
+    }
+    this.warmupCount = visited.size;
   }
   shorter(s) {
     if (s.paths[0].at(-1) === this.b) return 1;
@@ -177,6 +251,7 @@ class RouteSearch {
     if (index >= 0) this.stack.splice(index, 1);
     else this.queues[side].take(sibling);
     this.stack.push(sibling);
+    this.retryFirst = true;
   }
   close(s) {
     for (let side = 0; side < 2; side++) {
@@ -228,8 +303,17 @@ class RouteSearch {
       for (const group of [this.stack, this.queues[0].items, this.queues[1].items]) {
         for (const state of group) lower = Math.min(lower, this.candidateBound(state));
       }
-      this.bound = Math.max(this.bound, lower);
-      this.nextCheckpoint += Math.max(8, Math.ceil(this.steps / 8));
+      if (lower > this.bound) {
+        this.bound = lower;
+        this.lastQueueProgress = this.steps;
+      }
+      if (this.bound < total && this.queueLimit < MAX_QUEUE_LIMIT &&
+          this.pending + this.stack.length >= this.queueLimit &&
+          this.steps - Math.max(this.bestStep, this.lastQueueProgress) >= QUEUE_STALL_STEPS) {
+        this.queueLimit = Math.min(2 * this.queueLimit, MAX_QUEUE_LIMIT);
+        this.lastQueueProgress = this.steps;
+      }
+      this.nextCheckpoint += Math.max(8, Math.ceil((this.steps - this.warmupCount) / 8));
     }
     // Между контрольными точками новый рекорд тоже может достичь уже известной границы.
     if (this.bound >= total) {
@@ -252,9 +336,19 @@ class RouteSearch {
   }
   choose() {
     // При большой очереди обходим поддерево в глубину, сохраняя все альтернативы.
-    if (this.stack.length) return this.stack.pop();
+    if (this.stack.length) {
+      if (this.retryFirst || this.queueLimit === INITIAL_QUEUE_LIMIT || this.pending >= this.queueLimit) {
+        this.retryFirst = false;
+        return this.stack.pop();
+      }
+      // Свободные места в расширенной очереди занимают уже отложенные варианты.
+      while (this.stack.length && this.pending < this.queueLimit) {
+        const state = this.stack.pop();
+        this.queues[state.side].add(state);
+      }
+    }
     // Первый полный вариант перебора ищем по ближайшим допустимым продолжениям.
-    if (this.next && (this.seekingFirstCycle || this.pending >= 4000)) {
+    if (this.next && (this.seekingFirstCycle || this.pending >= this.queueLimit)) {
       const s = this.next;
       this.next = null;
       return s;
@@ -326,7 +420,7 @@ class RouteSearch {
         forks[side] = { pending: new Set(children), previous: forks[side] };
         for (const child of children) child.forks = forks;
       }
-      if (this.pending >= 4000 || this.stack.length) {
+      if (this.pending >= this.queueLimit || this.stack.length) {
         for (let i = children.length - 1; i >= 0; i--) this.stack.push(children[i]);
       } else {
         this.next = children[0];

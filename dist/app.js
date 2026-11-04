@@ -95,9 +95,11 @@ function render() {
   el('steps').textContent = integer.format(search.steps);
   el('crossing-cuts').textContent = integer.format(search.crossingCuts);
   el('dead-end-cuts').textContent = integer.format(search.deadEndCuts);
+  el('queue-limit').textContent = integer.format(search.queueLimit);
   el('l1').textContent = distance.format(s.len[0]);
   el('l2').textContent = distance.format(s.len[1]);
   el('best').textContent = distance.format(search.best.len[0] + search.best.len[1]);
+  el('warmup-count').textContent = integer.format(search.warmupCount);
   el('status').dataset.mode = mode;
   if (el('status').textContent !== modeNames[mode]) el('status').textContent = modeNames[mode];
   el('note').textContent = search.note;
