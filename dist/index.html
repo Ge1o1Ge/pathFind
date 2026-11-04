@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f7fa">
+  <title>Атлас · Поиск маршрута</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="search.js" defer></script>
+  <script src="convergence.js" defer></script>
+  <script src="series-runner.js" defer></script>
+  <script src="statistics.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+<svg class="symbols" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+  <symbol id="route" viewBox="0 0 24 24"><path d="m5 17 6-11 8 8-6 5-8-2"/><circle cx="5" cy="17" r="2"/><circle cx="11" cy="6" r="2"/><circle cx="19" cy="14" r="2"/></symbol>
+  <symbol id="scope" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v4m0 12v4M2 12h4m12 0h4"/></symbol>
+  <symbol id="sliders" viewBox="0 0 24 24"><path d="M4 7h5m5 0h6M4 17h9m5 0h2"/><circle cx="11" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></symbol>
+  <symbol id="book" viewBox="0 0 24 24"><path d="M3 5c3-1 6-1 9 1 3-2 6-2 9-1v14c-3-1-6-1-9 1-3-2-6-2-9-1zm9 1v14"/></symbol>
+  <symbol id="shuffle" viewBox="0 0 24 24"><path d="M3 6h3c4 0 7 12 11 12h4m-3-3 3 3-3 3M3 18h3c1.7 0 3.2-2.4 4.6-4.8M14 7.6C15 6.5 16 6 17 6h4m-3-3 3 3-3 3"/></symbol>
+  <symbol id="play" viewBox="0 0 24 24"><path d="m7 4 13 8-13 8z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="stop" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="step" viewBox="0 0 24 24"><path d="m5 5 10 7-10 7zM19 5v14"/></symbol>
+  <symbol id="activity" viewBox="0 0 24 24"><path d="M2 13h5l3-8 4 14 3-8 2 2h3"/></symbol>
+  <symbol id="layers" viewBox="0 0 24 24"><path d="m3 8 9-5 9 5-9 5zM3 12l9 5 9-5M3 16l9 5 9-5"/></symbol>
+  <symbol id="flag" viewBox="0 0 24 24"><path d="M5 21V4c5-4 9 4 15 0v10c-6 4-10-4-15 0"/></symbol>
+  <symbol id="branch" viewBox="0 0 24 24"><path d="m6 17 12-10"/><circle cx="5" cy="18" r="2.5"/><circle cx="19" cy="6" r="2.5"/></symbol>
+  <symbol id="chevron" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"/></symbol>
+  <symbol id="cpu" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M9 3v3m6-3v3M9 18v3m6-3v3M3 9h3m-3 6h3m12-6h3m-3 6h3"/></symbol>
+</defs></svg>
+<header class="top"><div class="wrap nav">
+  <div class="brand"><span class="mark"><svg><use href="#route"/></svg></span>Атлас</div>
+  <span class="division"></span><span class="nav-text">Лаборатория маршрутов</span>
+  <span class="local"><svg><use href="#cpu"/></svg>Вычисления в браузере</span>
+</div></header>
+<main class="wrap">
+  <div class="tabs lab-tabs" role="group" aria-label="Режим лаборатории">
+    <button id="manual-tab" aria-controls="manual-panel" aria-pressed="true">Ручной поиск</button>
+    <button id="stats-tab" aria-controls="stats-panel" aria-pressed="false">Сбор сложности</button>
+  </div>
+  <div id="manual-panel">
+  <div class="intro">
+    <div><div class="eyebrow"><i></i> ЭКСПЕРИМЕНТ 01</div>
+    <h1>Поиск маршрута</h1>
+    <p>Две ветви, один цикл и каждый город ровно один раз.</p></div>
+    <button class="method subtle" id="help"><svg><use href="#book"/></svg>Описание метода</button>
+  </div>
+  <div class="workspace">
+    <section class="panel map-card">
+      <div class="panel-head"><h2><svg><use href="#scope"/></svg>Карта городов</h2>
+        <div class="tabs" aria-label="Маршрут на карте" role="group"><button id="show-current" aria-pressed="true">Текущий</button><button id="show-best" aria-pressed="false">Лучший</button></div>
+      </div>
+      <div class="plot"><svg id="map" role="img" aria-label="Карта городов и двух ветвей маршрута"></svg></div>
+      <div class="legend"><span><i class="line blue"></i>Ветвь ℓ₁</span><span><i class="line orange"></i>Ветвь ℓ₂</span><span><i class="anchor"></i>Опорные города</span><b id="coverage"></b></div>
+    </section>
+    <aside class="panel controls">
+      <div class="panel-head"><h2><svg><use href="#sliders"/></svg>Параметры</h2></div>
+      <div class="control-body">
+        <label for="count">Количество городов</label>
+        <div class="stepper"><button id="minus" aria-label="Уменьшить количество городов">−</button><input type="number" id="count" min="3" max="30" step="1" value="16" required><button id="plus" aria-label="Увеличить количество городов">+</button></div>
+        <button id="generate" class="outline wide"><svg><use href="#shuffle"/></svg>Новое поле</button>
+        <div class="speed-head"><label for="speed">Скорость поиска</label><output id="speed-label" for="speed"></output></div>
+        <input type="range" id="speed" min="0" max="4" value="2" aria-label="Скорость поиска">
+        <div class="speed-limits"><span>Медленно</span><span>Быстро</span></div>
+        <div class="actions"><div><button id="start" class="primary"><svg><use href="#play"/></svg><span id="start-label">Запустить</span></button><button id="stop-search" class="outline" disabled><svg><use href="#stop"/></svg>Стоп</button></div>
+        <button id="single" class="subtle wide"><svg><use href="#step"/></svg>Один шаг</button></div>
+      </div>
+    </aside>
+  </div>
+  <section class="monitor">
+    <div class="monitor-head"><h2><svg><use href="#activity"/></svg>Ход поиска</h2><span id="status" role="status"></span></div>
+    <div class="metrics">
+      <div class="metric"><span><svg><use href="#layers"/></svg>Шаги поиска</span><strong id="steps"></strong><small>проверено кандидатов<br>Отсечено по пересечению: <b id="crossing-cuts">0</b><br>Тупиков по доступности: <b id="dead-end-cuts">0</b></small></div>
+      <div class="metric"><span><svg class="blue-ink"><use href="#branch"/></svg>Длина ветви ℓ₁</span><strong id="l1"></strong><small>на карте · ед.</small></div>
+      <div class="metric"><span><svg class="orange-ink"><use href="#branch"/></svg>Длина ветви ℓ₂</span><strong id="l2"></strong><small>на карте · ед.</small></div>
+      <div class="metric record"><span><svg><use href="#flag"/></svg>Лучший цикл</span><strong id="best"></strong><small>минимум найденной суммы ℓ₁ + ℓ₂</small></div>
+    </div>
+    <p class="note" id="note"></p>
+  </section>
+  <section class="panel convergence" aria-labelledby="chart-heading">
+    <div class="panel-head">
+      <h2 id="chart-heading"><svg><use href="#activity"/></svg>Сходимость поиска</h2>
+      <div class="tabs" role="group" aria-label="Величина на графике"><button id="length-mode" aria-pressed="true">Длины</button><button id="balance-mode" aria-pressed="false">Баланс</button></div>
+    </div>
+    <div class="chart-body">
+      <p id="chart-caption">Ступени показывают длины ветвей лучшего полного цикла. Оптимальная сумма лежит в полосе между рекордом и нижней границей.</p>
+      <svg id="convergence-chart" role="img" aria-labelledby="chart-heading chart-caption" aria-describedby="chart-values"></svg>
+      <div class="chart-legend" id="chart-values"></div>
+    </div>
+  </section>
+  <details class="panel details"><summary>Маршрут и координаты <svg><use href="#chevron"/></svg></summary><div id="details-body"></div></details>
+  </div>
+  <section id="stats-panel" hidden>
+    <div class="intro"><div><div class="eyebrow"><i></i> ЭКСПЕРИМЕНТ 02</div><h1>Сбор сложности</h1>
+      <p>Число шагов до подтверждения кратчайшего цикла на случайных полях от 3 до 30 городов.</p></div></div>
+    <section class="panel series-panel">
+      <div class="panel-head"><h2><svg><use href="#activity"/></svg>Автоматическая серия</h2><b id="series-total">0 / 28 000</b></div>
+      <div class="series-body">
+        <p>По 1 000 полей на каждый размер. Завершённые результаты сохраняются в этом браузере. После перезагрузки текущее незавершённое поле рассчитывается заново.</p>
+        <progress id="series-progress" max="28000" value="0" aria-label="Завершено полей в серии"></progress>
+        <div class="series-actions"><button id="series-start" class="primary" disabled><svg><use href="#play"/></svg><span id="series-start-label">Запустить серию</span></button>
+          <button id="series-stop" class="outline" disabled><svg><use href="#stop"/></svg>Стоп</button>
+          <span id="series-state" role="status">Загрузка статистики…</span></div>
+        <p id="series-error" role="alert" hidden></p>
+      </div>
+    </section>
+    <section class="panel stats-table">
+      <div class="panel-head"><h2><svg><use href="#layers"/></svg>Статистика по числу городов</h2>
+        <label class="metric-select">Показатель <select id="stats-metric"></select></label></div>
+      <p id="metric-description"></p>
+      <p>Минимум, максимум и среднее включают завершённые поля из серии и ручного поиска. Повтор ручного поиска на том же поле учитывается один раз.</p>
+      <p><b id="overall-bound"></b> Досрочное схождение учитывается, когда граница достигла рекорда при непустой очереди. Знаменатель — все завершённые поля.</p>
+      <div class="table-scroll"><table><thead><tr><th scope="col">Городов</th><th scope="col">Серия / 1 000</th><th scope="col">Вручную</th><th scope="col">Мин.</th><th scope="col">Макс.</th><th scope="col">Среднее</th><th scope="col">По границе</th></tr></thead><tbody id="stats-rows"></tbody></table></div>
+    </section>
+  </section>
+</main>
+<dialog id="dialog"><div class="dialog-head"><h2>Как устроен поиск</h2><button id="close" aria-label="Закрыть">×</button></div>
+  <p>Расстояние между городами измеряется по прямой. Самая удалённая пара становится опорными городами A и B. Цикл состоит из двух путей из A в B. Каждый промежуточный город принадлежит только одной ветви.</p>
+  <h3>Как растут ветви</h3><p>Начальный рекорд даёт обход ближайших свободных городов. Затем поиск развивает более короткую из открытых ветвей, сначала пробуя ближайшее продолжение. Каждая альтернатива хранит свой набор занятых городов.</p>
+  <p>Если новое ребро пересекает внутреннюю часть ребра любой из двух ветвей крест-накрест, продолжение сразу отбрасывается. При замыкании проверяются и последние рёбра к B. Общие концы, касания и наложения на одной прямой допускаются. Счётчик отсечений учитывает каждое отброшенное продолжение один раз, до его постановки в очередь.</p>
+  <p>Перед ветвлением поиск проверяет, можно ли соединить оставшиеся города в один путь с учётом уже выбранных рёбер. У каждого внутреннего города должны остаться вход и выход, а внутренние города должны быть связаны между собой. При обнаружении тупика поиск первым пробует ближайшую развилку длинной ветви, у которой сохранилась альтернатива.</p>
+  <p>При переборе поиск сначала старается довести до B первый полный вариант по ближайшим допустимым продолжениям, сохраняя альтернативы. Дальше, когда другая ветвь дорастает до длины отложенного варианта, поиск может вернуться к нему. При отсутствии продолжения берётся ближайшая отложенная альтернатива. Разрешена и прямая ветвь A—B.</p>
+  <h3>Когда доказан минимум</h3><p>Лучший цикл выбирается по сумме ℓ₁ + ℓ₂. Поиск пропускает повторные состояния с большей или равной суммой. Если нижняя оценка варианта равна рекорду или больше него, ветвление прекращается. Для оценки используются прямые расстояния до B и минимальное остовное дерево оставшихся городов с B.</p>
+  <p>Когда общая нижняя граница достигает длины лучшего цикла, поиск завершается, даже если в очереди ещё есть варианты. Это возможно уже на шаге 0. Сравнение выполняется с точностью чисел JavaScript. Округление до сотых применяется только при выводе.</p>
+  <p>Один шаг проверяет одну пару ветвей. «Стоп» сохраняет состояние и рекорд. На больших полях подтверждение минимума может занять много шагов.</p>
+  <h3>Как читать график</h3>
+  <p>Шаг 0 — начальный полный цикл. Синяя и оранжевая линии меняются при улучшении рекорда. Зелёный пунктир показывает нижнюю оценку оптимума по всем оставшимся вариантам. Оценка обновляется в контрольных точках. Разница между рекордом и этой границей ограничивает возможное улучшение в единицах длины.</p>
+  <p>В режиме «Баланс» энергия Ũ = h⁴(1/ℓ₁³ + 1/ℓ₂³) делится на энергию равных ветвей той же суммарной длины L. При ℓ₁ = ℓ₂ = L/2 получаем Ũ₀ = 16h⁴/L³. Отношение Q = Ũ/Ũ₀ равно 1 при точном балансе и растёт при дисбалансе. Коэффициент h сокращается.</p>
+</dialog>
+</body>
+</html>
