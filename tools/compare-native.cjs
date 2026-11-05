@@ -77,6 +77,8 @@ try {
     writeField(fieldDir, points);
     for (const name of i % 2 ? ['Concorde', 'khvastuns'] : ['khvastuns', 'Concorde']) row[name] = run(fieldDir, name, points);
     const js = new RouteSearch(points, undefined, true);
+    // В C++ пока нет периодических достроек: сверяем с тем же режимом JavaScript.
+    js.completionInterval = 0;
     js.advance();
     const native = row.khvastuns;
     assert.equal(native.length, row.Concorde.length, 'Оптимум на поле ' + row.field);
@@ -94,6 +96,7 @@ for (const name of ['khvastuns', 'Concorde']) {
   if (windows) table[name].cpuMs = summary(rows.map(r => r[name].cpuMs));
 }
 const wins = rows.filter(r => r.khvastuns.wallMs < r.Concorde.wallMs).length;
+console.log('Нативный khvastuns и его контроль JS: без периодических достроек.');
 console.log(JSON.stringify({ n, count, wallWinsKhvastuns: wins, table }, null, 2));
 fs.mkdirSync(build, { recursive: true });
 const output = path.join(build, 'native-' + n + 'x' + count + '-' + new Date().toISOString().replace(/[:.]/g, '-') + '.json');

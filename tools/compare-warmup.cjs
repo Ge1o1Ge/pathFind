@@ -8,7 +8,7 @@ if (!Number.isInteger(n) || n < 3 || n > 30 || !Number.isSafeInteger(count) || c
 const variants = warmupVariants(n);
 const rows = variants.map(({ limit, requests }) => ({
   запрос: requests.join('/'), лимит: limit, циклы: 0, вставки: 0, пары: 0, состояния: 0,
-  подготовка_мс: 0, разминка_мс: 0, поиск_мс: 0, всего_мс: 0
+  подготовка_мс: 0, разминка_мс: 0, поиск_мс: 0, достройка_мс: 0, продолжения: 0, всего_мс: 0
 }));
 function solve(points, limit) {
   const run = new RouteSearch(points, limit);
@@ -33,6 +33,8 @@ for (let field = 0; field < count; field++) {
     row.подготовка_мс += v.preparationMs;
     row.разминка_мс += v.warmupMs;
     row.поиск_мс += v.searchMs;
+    row.достройка_мс += v.completionMs;
+    row.продолжения += v.completionChecks;
     row.всего_мс += v.totalMs;
   }
 }

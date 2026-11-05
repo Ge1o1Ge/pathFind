@@ -4,13 +4,13 @@ const { mkdtempSync, writeFileSync, readFileSync, rmSync, statSync } = require('
 const { tmpdir } = require('node:os');
 const { join, resolve } = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { RouteSearch, seriesField, routeDistance } = require('./lab.cjs');
+const { createRouteSearch, seriesField, routeDistance } = require('./lab.cjs');
 const { heldKarp } = require('../dist/held-karp.js');
 
 const [size = '18', number = '6', concordePath] = process.argv.slice(2);
 const n = Number(size), count = Number(number), integer = !!concordePath;
-if (!Number.isInteger(n) || n < 3 || n > (integer ? 30 : 22) || !Number.isSafeInteger(count) || count < 1) {
-  throw new Error('Запуск: node tools/compare-solvers.cjs <города: 3–22, с Concorde до 30> <число полей> [путь к Concorde]');
+if (!Number.isInteger(n) || n < 3 || n > 30 || !Number.isSafeInteger(count) || count < 1) {
+  throw new Error('Запуск: node tools/compare-solvers.cjs <города: 3–30> <число полей> [путь к Concorde]');
 }
 function findConcorde(input) {
   const path = resolve(input);
@@ -53,30 +53,37 @@ function concorde(dist) {
     rmSync(dir, { recursive: true, force: true });
   }
 }
-const solvers = {
-  khvastuns(points) {
-    const run = new RouteSearch(points, undefined, integer);
+const solvers = {};
+for (const [id, name] of [['khvastuns', 'khvastuns'], ['hvastuns-4', 'Hvastuns-4']]) {
+  solvers[name] = points => {
+    const run = createRouteSearch(id, points, undefined, integer);
     run.advance();
     const [out, back] = run.best.paths;
-    return { length: run.best.len[0] + run.best.len[1], tour: out.concat(back.slice(1, -1).reverse()) };
-  }
-};
+    return { length: run.best.len[0] + run.best.len[1], tour: out.concat(back.slice(1, -1).reverse()),
+      states: run.mainSteps, completionChecks: run.completionChecks };
+  };
+}
 if (n <= 22) solvers['Held–Karp'] = points => heldKarp(matrix(points));
 if (exe) solvers.Concorde = points => concorde(matrix(points));
 
 const names = Object.keys(solvers), times = Object.fromEntries(names.map(name => [name, []]));
 const nativeTimes = [];
+const stateTotals = {};
+const completionTotals = {};
 // Прогрев JS отдельно от замеров. Concorde при каждом запуске получает новый процесс.
 const warm = seriesField(14, count + 1);
 solvers.khvastuns(warm);
+solvers['Hvastuns-4'](warm);
 if (solvers['Held–Karp']) solvers['Held–Karp'](warm);
 for (let field = 0; field < count; field++) {
   const points = seriesField(n, field), d = matrix(points);
   let opt;
   for (let j = 0; j < names.length; j++) {
     const name = names[(j + field) % names.length], start = performance.now();
-    const { length, tour, reportedMs } = solvers[name](points);
+    const { length, tour, reportedMs, states, completionChecks } = solvers[name](points);
     times[name].push(performance.now() - start);
+    if (states !== undefined) stateTotals[name] = (stateTotals[name] || 0) + states;
+    if (completionChecks !== undefined) completionTotals[name] = (completionTotals[name] || 0) + completionChecks;
     if (reportedMs !== undefined) nativeTimes.push(reportedMs);
     const valid = tour.length === n && tour.every(i => Number.isInteger(i) && i >= 0 && i < n) && new Set(tour).size === n;
     const actual = valid ? tour.reduce((s, city, i) => s + d[city][tour[(i + 1) % n]], 0) : NaN;
@@ -87,6 +94,11 @@ for (let field = 0; field < count; field++) {
   }
 }
 console.log('Городов: %d. Совпавших оптимумов: %d/%d. Веса: %s.', n, count, count, integer ? 'ceil(1000 × расстояние)' : 'без округления');
+const wins = times['Hvastuns-4'].filter((t, i) => t < times.khvastuns[i]).length;
+console.log('Hvastuns-4 быстрее двух ветвей на %d из %d полей. Средние состояния основного поиска: %d / %d (две / четыре ветви).',
+  wins, count, Math.round(stateTotals.khvastuns / count), Math.round(stateTotals['Hvastuns-4'] / count));
+console.log('Средние проверки пробных достроек: %d / %d (две / четыре ветви), отдельно от состояний поиска.',
+  Math.round(completionTotals.khvastuns / count), Math.round(completionTotals['Hvastuns-4'] / count));
 console.table(names.map(name => {
   const t = times[name].sort((a, b) => a - b), round = x => +x.toFixed(3);
   return { алгоритм: name, среднее_мс: round(t.reduce((s, x) => s + x, 0) / count),

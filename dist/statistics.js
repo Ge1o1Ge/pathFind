@@ -4,11 +4,23 @@ const SERIES_TARGET = 1000;
 const MAX_SERIES_CITIES = 30;
 const PLAN_KEY = 'series-plan';
 const workMetrics = {
-  mainSteps: ['Состояния основного поиска', 'Сколько состояний двух ветвей было обработано до доказательства оптимума. Разминка сюда не входит.'],
-  totalMs: ['Весь расчёт, мс', 'Подготовка + разминка + основной поиск до доказательства оптимума. Без отрисовки, пауз и ожидания между порциями расчёта.'],
+  mainSteps: ['Состояния основного поиска', 'У двух и четырёх ветвей это извлечённые варианты. Hvastuns-4 проверяет оценку продолжений ещё до очереди. У Held–Karp это заполненные ячейки таблицы. Стоимость шага различается.'],
+  duplicateCuts: ['Отсечено повторов', 'Состояния с уже известной меньшей или равной длиной.'],
+  memoEvictions: ['Вытеснено записей кеша', 'На полях от 31 города заполненный кеш заменяет самые старые записи новыми. Варианты поиска сохраняются.'],
+  seenStates: ['Записей в кеше', 'Количество сохранённых состояний на момент завершения. Максимум 1 000 000.'],
+  treeHits: ['Попадания в кеш остовов', 'Сколько нижних оценок использовали ранее рассчитанный остов или лес.'],
+  treeMisses: ['Пересчёты остовов', 'Сколько раз остов или лес пришлось вычислить заново.'],
+  treeEvictions: ['Вытеснения кеша остовов', 'На полях от 31 города кеш остовов обновляется после заполнения 16 000 записей.'],
+  totalMs: ['Весь расчёт, мс', 'Подготовка + разминка + основной поиск + пробные достройки до доказательства оптимума. Без отрисовки, пауз и ожидания между порциями расчёта.'],
   preparationMs: ['Подготовка, мс', 'Расстояния, геометрия, начальные структуры и первая нижняя оценка.'],
   warmupMs: ['Разминка, мс', 'Всё построение начальных циклов: жадный маршрут, вставки, поиск соседей 2-opt и сохранение рекорда.'],
-  searchMs: ['Основной поиск, мс', 'Активное время перебора и подтверждения оптимума после разминки.'],
+  searchMs: ['Основной поиск, мс', 'Активное время перебора и подтверждения оптимума после разминки, без пробных достроек.'],
+  completionAttempts: ['Попытки достройки', 'Пробные завершения текущих ветвей во время основного поиска.'],
+  completionChecks: ['Кандидаты достройки', 'Каждый проверенный следующий город или встреча ветвей, включая отвергнутые. Отдельно от состояний основного поиска.'],
+  completionSolutions: ['Полные циклы достройки', 'Сколько пробных достроек завершилось допустимым циклом. Циклы между попытками могут повторяться.'],
+  completionImprovements: ['Улучшения от достройки', 'Сколько раз пробное завершение уменьшило лучший L.'],
+  completionExhausted: ['Доказанные тупики достройки', 'Попытки, полностью исчерпавшие допустимые продолжения. Достижение лимита проверок тупиком не считается.'],
+  completionMs: ['Пробные достройки, мс', 'Активное время пробного завершения ветвей, отдельно от основного поиска.'],
   warmupCycles: ['Разные циклы разминки', 'Сколько полных циклов принято в разминке. Не более n − 2, включая первый.'],
   warmupCandidates: ['Кандидаты разминки', 'Сумма проверенных позиций вставки и рассмотренных пар рёбер 2-opt, включая отвергнутые.'],
   insertionChecks: ['Позиции вставки', 'Каждое вычисление прироста длины при попытке вставить город.'],
@@ -35,10 +47,11 @@ function emptyStats(n) {
   return { n, series: 0, manual: 0, byBound: 0, metrics: {} };
 }
 
-function statsReport(rows, plan = initialPlan()) {
+function statsReport(rows, plan = initialPlan(), algorithm = 'khvastuns') {
   function counts(series, manual, byBound, withWarmupSteps) {
     const completed = series + manual;
-    return { series, manual, completed, withWarmupSteps, byBound, byBoundPercent: completed ? 100 * byBound / completed : null };
+    return { series, manual, completed, withWarmupSteps, byBound: algorithm === 'held' ? null : byBound,
+      byBoundPercent: completed && algorithm !== 'held' ? 100 * byBound / completed : null };
   }
   let series = 0, manual = 0, byBound = 0, withWarmupSteps = 0;
   const sizes = rows.filter(row => row.n <= MAX_SERIES_CITIES || row.manual > 0).map(row => {
@@ -56,10 +69,22 @@ function statsReport(rows, plan = initialPlan()) {
     return { n: row.n, ...samples, batchStart, seriesTarget: row.n <= MAX_SERIES_CITIES ? batchStart + SERIES_TARGET : null, metrics };
   });
   return {
-    formatVersion: 1, algorithm: 'khvastuns', exportedAt: new Date().toISOString(), seriesTargetPerSize: SERIES_TARGET,
+    formatVersion: 1, algorithm, exportedAt: new Date().toISOString(), seriesTargetPerSize: SERIES_TARGET,
     metricLabels: Object.fromEntries(Object.entries(statsMetrics).map(([key, [label]]) => [key, label])),
     totals: counts(series, manual, byBound, withWarmupSteps), sizes
   };
+}
+
+function downloadStatsReport(report, name) {
+  const file = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(file);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'pathfind-' + name + '-results-' + report.exportedAt.replace(/[:.]/g, '-') + '.json';
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function addMeasurement(row, measurement, index) {
@@ -82,9 +107,9 @@ function addMeasurement(row, measurement, index) {
   return true;
 }
 
-function openStatsDatabase() {
+function openStatsDatabase(algorithm = 'khvastuns') {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open('atlas-route-statistics-v1', 1);
+    const request = indexedDB.open('atlas-route-statistics-v1' + (algorithm === 'khvastuns' ? '' : '-' + algorithm), 1);
     request.onupgradeneeded = () => request.result.createObjectStore('sizes', { keyPath: 'n' });
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -146,13 +171,15 @@ function saveMeasurement(db, plan, n, measurement, index) {
   });
 }
 
-function initStatistics(maxCities) {
+function initStatistics(maxCities, algorithm) {
+  const selected = () => el('algorithm').value === algorithm;
+  if (algorithm === 'held') maxCities = Math.min(maxCities, 22);
   const minCities = Number(el('count').min);
   const cityCounts = Array.from({ length: maxCities - minCities + 1 }, (_, i) => minCities + i);
   let rows = cityCounts.map(emptyStats), plan = initialPlan();
   const recordedFields = new WeakMap();
   const average = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 3 });
-  const database = openStatsDatabase();
+  const database = openStatsDatabase(algorithm);
   let ready = false, running = false, task = null, worker = null, localRunner = null;
   let exporting = false, changing = false;
   let error = '', paintTimer = null;
@@ -170,7 +197,7 @@ function initStatistics(maxCities) {
       if (localRunner) { localRunner({ type: 'pause' }); localRunner = null; }
       plan = snapshot.plan;
       rows = snapshot.rows;
-      el('export-status').hidden = true;
+      if (selected()) el('export-status').hidden = true;
     } else snapshot.rows.forEach(merge);
     ready = true;
     paint();
@@ -187,6 +214,7 @@ function initStatistics(maxCities) {
   function paint() {
     clearTimeout(paintTimer);
     paintTimer = null;
+    if (!selected()) return;
     el('stats-tab').textContent = running ? 'Сбор сложности · идёт' : 'Сбор сложности';
     if (el('stats-panel').hidden) return;
     const busy = !ready || changing;
@@ -207,11 +235,13 @@ function initStatistics(maxCities) {
     el('series-start-label').textContent = plan.only !== null && completed >= target ? 'Продолжить общую серию'
       : task || completed ? 'Продолжить серию' : 'Запустить серию';
     const position = task ? ' · ' + task.n + ' гор., поле ' + (task.index + 1) + ' · состояний поиска: ' + integer.format(task.mainSteps) +
-      ' · порог очереди ' + integer.format(task.queueLimit) : '';
+      (algorithm === 'held' ? '' : ' · достройка: ' + integer.format(task.completionChecks || 0) +
+        ' проверок · порог очереди ' + integer.format(task.queueLimit)) : '';
     const scope = plan.only !== null && !task ? ' · ' + plan.only + ' гор.' : '';
     el('series-state').textContent = (!ready ? 'Ожидание хранилища' : completed >= target ? 'Серия завершена' : running ? 'Идёт сбор' : task || completed ? 'Остановлено' : 'Готово к запуску') + scope + position;
     el('series-error').hidden = !error;
     el('series-error').textContent = error;
+    el('overall-bound').parentElement.hidden = algorithm === 'held';
     el('overall-bound').textContent = 'Всего завершено по границе ' + share(byBound, total) + ' (' + integer.format(byBound) + ' из ' + integer.format(total) + ').';
     el('metric-description').textContent = statsMetrics[metric][1];
     el('stats-rows').innerHTML = rows.filter(row => row.n <= MAX_SERIES_CITIES || row.manual > 0).map(row => {
@@ -219,7 +249,7 @@ function initStatistics(maxCities) {
       const measured = m ? m.samples ?? count : 0;
       const values = m ? [m.min, m.max, m.sum / measured].map(v => average.format(v)) : ['—', '—', '—'];
       return '<tr><th scope="row">' + row.n + '</th><td>' + integer.format(row.series) + '</td><td>' + integer.format(row.manual) + '</td>' +
-        '<td>' + integer.format(measured) + '</td>' + values.map(v => '<td>' + v + '</td>').join('') + '<td title="' + row.byBound + ' из ' + count + '">' + share(row.byBound, count) + '</td>' +
+        '<td>' + integer.format(measured) + '</td>' + values.map(v => '<td>' + v + '</td>').join('') + '<td title="' + row.byBound + ' из ' + count + '">' + (algorithm === 'held' ? '—' : share(row.byBound, count)) + '</td>' +
         '<td class="row-actions">' + (row.n > MAX_SERIES_CITIES ? 'Только вручную' : ['restart', 'add'].map(action => {
           const label = action === 'restart' ? 'Заново' : 'Ещё 1 000';
           return '<button class="outline" data-action="' + action + '" data-n="' + row.n + '" aria-label="' + label + ', ' + row.n + ' городов"' +
@@ -261,7 +291,9 @@ function initStatistics(maxCities) {
   }
   function receive(message) {
     if (!task) return;
+    if (message.error) { running = false; task = null; error = message.error; paint(); return; }
     task.mainSteps = message.mainSteps;
+    task.completionChecks = message.completionChecks;
     task.queueLimit = message.queueLimit ?? INITIAL_QUEUE_LIMIT;
     if (message.done) {
       task.result = message.measurement;
@@ -281,7 +313,7 @@ function initStatistics(maxCities) {
           worker = null;
           localRunner = createSeriesRunner(receive, 8);
           if (task && !task.result) {
-            localRunner({ type: 'start', points: task.points });
+            localRunner({ type: 'start', algorithm, points: task.points });
             if (!running) localRunner({ type: 'pause' });
           }
         };
@@ -294,10 +326,10 @@ function initStatistics(maxCities) {
     const row = rows.find(r => (plan.only === null || plan.only === r.n) && remaining(r));
     if (!row) { running = false; paint(); return; }
     task = { n: row.n, index: row.series, points: seriesField(row.n, row.series), mainSteps: 0, queueLimit: INITIAL_QUEUE_LIMIT };
-    command({ type: 'start', points: task.points });
+    command({ type: 'start', algorithm, points: task.points });
   }
 
-  const updates = typeof BroadcastChannel === 'function' ? new BroadcastChannel('atlas-route-series') : null;
+  const updates = typeof BroadcastChannel === 'function' ? new BroadcastChannel('atlas-route-series' + (algorithm === 'khvastuns' ? '' : '-' + algorithm)) : null;
   if (updates) updates.onmessage = () => refresh().catch(storageError);
 
   async function changeSeries(action, n = null) {
@@ -306,7 +338,7 @@ function initStatistics(maxCities) {
       const affected = n === null ? rows : [rows[n - minCities]];
       const series = affected.reduce((sum, row) => sum + row.series, 0);
       const manual = affected.reduce((sum, row) => sum + row.manual, 0);
-      const question = n === null ? 'Сбросить всю статистику?' : 'Начать заново для ' + n + ' городов?';
+      const question = n === null ? 'Сбросить всю статистику ' + ROUTE_ALGORITHMS[algorithm] + '?' : 'Начать заново для ' + n + ' городов?';
       const detail = 'Серийных результатов к удалению: ' + integer.format(series) + ', ручных: ' + integer.format(manual) + '.';
       if (!window.confirm(question + '\n' + detail)) return;
     }
@@ -340,7 +372,7 @@ function initStatistics(maxCities) {
       applySnapshot(snapshot);
       if (snapshot.changed && plan.revision === snapshot.plan.revision) {
         updates?.postMessage(plan.revision);
-        if (action !== 'reset') startSeries();
+        if (action !== 'reset' && selected()) startSeries();
       } else error = 'План серии изменён в другой вкладке. Данные обновлены.';
     } catch {
       error = 'Не удалось изменить серию в локальном хранилище. Попробуй ещё раз.';
@@ -357,36 +389,6 @@ function initStatistics(maxCities) {
     el('stats-tab').setAttribute('aria-pressed', String(stats));
     if (stats) { paint(); refresh().catch(storageError); }
   }
-  el('manual-tab').onclick = () => selectMode(false);
-  el('stats-tab').onclick = () => selectMode(true);
-  el('stats-metric').innerHTML = Object.entries(statsMetrics).map(([key, m]) => '<option value="' + key + '">' + m[0] + '</option>').join('');
-  el('stats-metric').onchange = paint;
-  el('stats-export').onclick = async () => {
-    if (!ready || exporting || changing) return;
-    exporting = true;
-    paint();
-    const status = el('export-status');
-    try {
-      const snapshot = await readStatistics(await database, cityCounts);
-      const report = statsReport(snapshot.rows, snapshot.plan);
-      const file = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json;charset=utf-8' });
-      const url = URL.createObjectURL(file);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = 'pathfind-results-' + report.exportedAt.replace(/[:.]/g, '-') + '.json';
-      document.body.append(link);
-      link.click();
-      link.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-      status.textContent = 'JSON подготовлен. Завершённых прогонов в сводке — ' + integer.format(report.totals.completed) + '.';
-    } catch {
-      status.textContent = 'Не удалось скачать сводку. Попробуй ещё раз.';
-    } finally {
-      exporting = false;
-      status.hidden = false;
-      paint();
-    }
-  };
   function startSeries() {
     running = true;
     error = '';
@@ -395,34 +397,73 @@ function initStatistics(maxCities) {
     else command({ type: 'resume' });
     paint();
   }
-  el('series-start').onclick = () => {
-    if (running || !ready || changing) return;
-    if (plan.only !== null && !remaining(rows[plan.only - minCities])) changeSeries('resume-all');
-    else startSeries();
-  };
-  el('series-add').onclick = () => changeSeries('add');
-  el('stats-reset').onclick = () => changeSeries('reset');
-  el('stats-rows').onclick = event => {
-    const button = event.target.closest('button[data-action]');
-    if (button) changeSeries(button.dataset.action, Number(button.dataset.n));
-  };
-  el('series-stop').onclick = () => {
-    running = false;
-    if (task && !task.result) command({ type: 'pause' });
+  async function report() {
+    const snapshot = await readStatistics(await database, cityCounts);
+    return statsReport(snapshot.rows, snapshot.plan, algorithm);
+  }
+  function activate() {
+    el('manual-tab').onclick = () => selectMode(false);
+    el('stats-tab').onclick = () => selectMode(true);
+    const metric = el('stats-metric'), previous = metric.value;
+    const supported = Object.entries(statsMetrics).filter(([key]) => algorithm !== 'held' ||
+      ['mainSteps', 'totalMs', 'preparationMs', 'searchMs', 'l1', 'l2', 'length', 'ratio', 'balance', 'q'].includes(key));
+    metric.innerHTML = supported.map(([key, m]) => '<option value="' + key + '">' + m[0] + '</option>').join('');
+    if (supported.some(([key]) => key === previous)) metric.value = previous;
+    metric.onchange = paint;
+    el('stats-export').onclick = async () => {
+      if (!ready || exporting || changing) return;
+      exporting = true;
+      paint();
+      const status = el('export-status');
+      try {
+        const result = await report();
+        downloadStatsReport(result, algorithm);
+        status.textContent = 'JSON подготовлен. Завершённых прогонов в сводке — ' + integer.format(result.totals.completed) + '.';
+      } catch {
+        status.textContent = 'Не удалось скачать сводку. Попробуй ещё раз.';
+      } finally {
+        exporting = false;
+        status.hidden = false;
+        paint();
+      }
+    };
+    el('series-start').onclick = () => {
+      if (running || !ready || changing) return;
+      if (plan.only !== null && !remaining(rows[plan.only - minCities])) changeSeries('resume-all');
+      else startSeries();
+    };
+    el('series-add').onclick = () => changeSeries('add');
+    el('stats-reset').onclick = () => changeSeries('reset');
+    el('stats-rows').onclick = event => {
+      const button = event.target.closest('button[data-action]');
+      if (button) changeSeries(button.dataset.action, Number(button.dataset.n));
+    };
+    el('series-stop').onclick = () => {
+      running = false;
+      if (task && !task.result) command({ type: 'pause' });
+      paint();
+    };
+    el('export-status').hidden = true;
+    el('stats-scope').textContent = ROUTE_ALGORITHMS[algorithm] + ' · серия 3–' + Math.min(maxCities, MAX_SERIES_CITIES) + ' городов.';
     paint();
-  };
-  window.addEventListener('focus', () => { if (!el('stats-panel').hidden) refresh().catch(storageError); });
+  }
+  window.addEventListener('focus', () => { if (selected() && !el('stats-panel').hidden) refresh().catch(storageError); });
   refresh().catch(storageError);
   return {
-    recordManual(points, run) {
+    activate, report,
+    pause() {
+      running = false;
+      if (task && !task.result) command({ type: 'pause' });
+    },
+    recordManual(points, measurement) {
       if (!ready) {
-        refresh().then(() => this.recordManual(points, run)).catch(storageError);
+        refresh().then(() => this.recordManual(points, measurement)).catch(storageError);
         return;
       }
       const version = generation(plan, points.length);
       if (recordedFields.get(points) === version) return;
       recordedFields.set(points, version);
-      commit(points.length, measureRun(run), null).catch(() => {
+      commit(points.length, measurement, null).catch(() => {
         if (recordedFields.get(points) === version) recordedFields.delete(points);
         storageError();
       });

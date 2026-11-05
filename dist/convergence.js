@@ -10,7 +10,7 @@ function axisInterval(range) {
 
 function drawConvergence(svg, run, balance) {
   const w = svg.clientWidth, h = svg.clientHeight;
-  if (!w || !h) return;
+  if (!w || !h || !run.history.length) return;
   const left = 45, right = w - 17, top = 28, bottom = h - 43;
   const x = step => left + (right - left) * step / Math.max(1, run.steps);
   const sum = row => row.len[0] + row.len[1];

@@ -6,7 +6,10 @@
   <meta name="theme-color" content="#f5f7fa">
   <title>Атлас · Поиск маршрута</title>
   <link rel="stylesheet" href="style.css">
+  <script src="one-tree.js" defer></script>
   <script src="search.js" defer></script>
+  <script src="search-four.js" defer></script>
+  <script src="held-karp.js" defer></script>
   <script src="fields.js" defer></script>
   <script src="convergence.js" defer></script>
   <script src="series-runner.js" defer></script>
@@ -37,15 +40,19 @@
   <span class="local"><svg><use href="#cpu"/></svg>Вычисления в браузере</span>
 </div></header>
 <main class="wrap">
+  <div class="lab-toolbar"><label class="metric-select">Алгоритм <select id="algorithm">
+    <option value="khvastuns">khvastuns · 2 ветви</option><option value="hvastuns-4">Hvastuns-4 · 4 ветви</option><option value="held">Held–Karp · до 22 городов</option>
+  </select></label>
   <div class="tabs lab-tabs" role="group" aria-label="Режим лаборатории">
     <button id="manual-tab" aria-controls="manual-panel" aria-pressed="true">Ручной поиск</button>
     <button id="stats-tab" aria-controls="stats-panel" aria-pressed="false">Сбор сложности</button>
+  </div>
   </div>
   <div id="manual-panel">
   <div class="intro">
     <div><div class="eyebrow"><i></i> ЭКСПЕРИМЕНТ 01</div>
     <h1>Поиск маршрута</h1>
-    <p>Алгоритм khvastuns: две ветви, один цикл и каждый город ровно один раз.</p></div>
+    <p id="algorithm-intro">Алгоритм khvastuns: две ветви, один цикл и каждый город ровно один раз.</p></div>
     <button class="method subtle" id="help"><svg><use href="#book"/></svg>Описание метода</button>
   </div>
   <div class="workspace">
@@ -53,13 +60,13 @@
       <div class="panel-head"><h2><svg><use href="#scope"/></svg>Карта городов</h2>
         <div class="tabs" aria-label="Маршрут на карте" role="group"><button id="show-current" aria-pressed="true">Текущий</button><button id="show-best" aria-pressed="false">Лучший</button></div>
       </div>
-      <div class="plot"><svg id="map" role="img" aria-label="Карта городов и двух ветвей маршрута"></svg></div>
-      <div class="legend"><span><i class="line blue"></i>Ветвь ℓ₁</span><span><i class="line orange"></i>Ветвь ℓ₂</span><span><i class="anchor"></i>Опорные города</span><b id="coverage"></b></div>
+      <div class="plot"><svg id="map" role="img" aria-label="Карта городов и ветвей маршрута"></svg></div>
+      <div class="legend"><span><i class="line blue"></i>Ветвь ℓ₁</span><span><i class="line orange"></i>Ветвь ℓ₂</span><span class="arm-extra" hidden><i class="line teal"></i>Ветвь ℓ₃</span><span class="arm-extra" hidden><i class="line violet"></i>Ветвь ℓ₄</span><span><i class="anchor"></i>Опорные города</span><b id="coverage"></b></div>
     </section>
     <aside class="panel controls">
       <div class="panel-head"><h2><svg><use href="#sliders"/></svg>Параметры</h2></div>
       <div class="control-body">
-        <label for="count">Количество городов · 3–100</label>
+        <label for="count">Количество городов · <span id="count-range">3–100</span></label>
         <div class="stepper"><button id="minus" aria-label="Уменьшить количество городов">−</button><input type="number" id="count" min="3" max="100" step="1" value="16" required><button id="plus" aria-label="Увеличить количество городов">+</button></div>
         <button id="generate" class="outline wide"><svg><use href="#shuffle"/></svg>Новое поле</button>
         <div class="speed-head"><label for="speed">Скорость поиска</label><output id="speed-label" for="speed"></output></div>
@@ -73,20 +80,31 @@
   <section class="monitor">
     <div class="monitor-head"><h2><svg><use href="#activity"/></svg>Ход поиска</h2><span id="status" role="status"></span></div>
     <div class="metrics">
-      <div class="metric"><span><svg><use href="#layers"/></svg>Основной поиск</span><strong id="steps"></strong><small>обработано состояний<br>Отсечено по пересечению: <b id="crossing-cuts">0</b><br>Тупиков по доступности: <b id="dead-end-cuts">0</b><br>Порог очереди: <b id="queue-limit"></b></small></div>
+      <div class="metric"><span><svg><use href="#layers"/></svg>Основной поиск</span><strong id="steps"></strong><small>обработано состояний<span class="branch-only"><br>Отсечено по пересечению: <b id="crossing-cuts">0</b><br>Тупиков по доступности: <b id="dead-end-cuts">0</b><br>Порог очереди: <b id="queue-limit"></b></span></small></div>
       <div class="metric"><span><svg class="blue-ink"><use href="#branch"/></svg>Длина ветви ℓ₁</span><strong id="l1"></strong><small>на карте · ед.</small></div>
       <div class="metric"><span><svg class="orange-ink"><use href="#branch"/></svg>Длина ветви ℓ₂</span><strong id="l2"></strong><small>на карте · ед.</small></div>
-      <div class="metric record"><span><svg><use href="#flag"/></svg>Лучший цикл</span><strong id="best"></strong><small>минимум найденной суммы ℓ₁ + ℓ₂<br>Циклов в разминке: <b id="warmup-count"></b></small></div>
+      <div class="metric record"><span><svg><use href="#flag"/></svg>Лучший цикл</span><strong id="best"></strong><small>минимум найденной суммы ℓ₁ + ℓ₂<span class="branch-only"><br>Циклов в разминке: <b id="warmup-count"></b></span></small></div>
     </div>
+    <div id="extra-lengths" class="note" hidden>Ветви от B на карте · ℓ₃ <b id="l3"></b> · ℓ₄ <b id="l4"></b></div>
     <div class="metrics work-metrics">
-      <div class="metric"><span>Кандидаты разминки</span><strong id="warmup-candidates"></strong><small>Позиций вставки: <b id="insertion-checks"></b><br>Пар рёбер 2-opt: <b id="two-opt-checks"></b><br>Отдельно: жадный старт — <b id="greedy-checks"></b> проверок</small></div>
+      <div class="metric branch-only"><span>Кандидаты разминки</span><strong id="warmup-candidates"></strong><small>Позиций вставки: <b id="insertion-checks"></b><br>Пар рёбер 2-opt: <b id="two-opt-checks"></b><br>Отдельно: жадный старт — <b id="greedy-checks"></b> проверок</small></div>
       <div class="metric"><span>Подготовка</span><strong id="prep-time"></strong><small>расстояния, геометрия и начальная оценка</small></div>
-      <div class="metric"><span>Разминка</span><strong id="warmup-time"></strong><small>построение и сравнение циклов</small></div>
+      <div class="metric branch-only"><span>Разминка</span><strong id="warmup-time"></strong><small>построение и сравнение циклов</small></div>
       <div class="metric"><span>Весь расчёт</span><strong id="total-time"></strong><small>в том числе основной поиск: <b id="main-time"></b><br>без пауз и отрисовки</small></div>
     </div>
     <p class="note" id="note"></p>
   </section>
-  <section class="panel convergence" aria-labelledby="chart-heading">
+  <p class="note branch-only" id="search-diagnostics">Отложено вариантов <b id="pending-count">0</b> ·
+    Кеш состояний <b id="seen-count">0</b> / <b id="seen-limit"></b> · Отсечено повторов <b id="duplicate-cuts">0</b> ·
+    Вытеснено записей <b id="memo-evictions">0</b><br>
+    Кеш остовов <b id="tree-cache-count">0</b> / <b id="tree-cache-limit"></b> ·
+    Попаданий <b id="tree-cache-hits">0</b> · Пересчётов <b id="tree-cache-misses">0</b> ·
+    Вытеснено <b id="tree-cache-evictions">0</b><br>Нижняя оценка · <span id="bound-method"></span></p>
+  <p class="note branch-only">Пробные достройки · попыток <b id="completion-attempts">0</b> ·
+    проверено продолжений <b id="completion-checks">0</b> · полных циклов <b id="completion-solutions">0</b> ·
+    улучшений L <b id="completion-improvements">0</b> · доказанных тупиков <b id="completion-exhausted">0</b> ·
+    время <b id="completion-time">0 мс</b><br>Неудачная попытка с исчерпанным лимитом не отсекает состояние.</p>
+  <section id="chart-panel" class="panel convergence" aria-labelledby="chart-heading">
     <div class="panel-head">
       <h2 id="chart-heading"><svg><use href="#activity"/></svg>Сходимость поиска</h2>
       <div class="tabs" role="group" aria-label="Величина на графике"><button id="length-mode" aria-pressed="true">Длины</button><button id="balance-mode" aria-pressed="false">Баланс</button></div>
@@ -99,16 +117,16 @@
   </section>
   <details class="panel details"><summary>Маршрут и координаты <svg><use href="#chevron"/></svg></summary><div id="details-body"></div></details>
   <section class="panel stats-table comparison">
-    <div class="panel-head"><h2>Сравнение на одном поле</h2><label class="metric-select">Что сравнивать <select id="compare-kind"><option value="warmup">Разминка khvastuns</option><option value="solvers">khvastuns и Held–Karp</option></select></label><div class="series-actions"><button id="compare-start" class="outline">Сравнить на этом поле</button><button id="compare-stop" class="outline" disabled>Стоп</button></div></div>
+    <div class="panel-head"><h2>Сравнение на одном поле</h2><label class="metric-select">Что сравнивать <select id="compare-kind"><option value="solvers">Алгоритмы на этом поле</option><option value="warmup">Лимиты разминки</option></select></label><div class="series-actions"><button id="compare-start" class="outline">Сравнить на этом поле</button><button id="compare-stop" class="outline" disabled>Стоп</button></div></div>
     <p id="warmup-description">Одни и те же координаты, отдельный поиск для каждого лимита: 0, 2, 5, 10, 20 и 50. Максимум — n − 2. Совпавшие лимиты считаются один раз. Эти прогоны не добавляются в статистику серий.</p>
-    <p id="solvers-description" hidden>Два точных алгоритма на одних координатах без округления. Время включает подготовку и поиск. Held–Karp доступен до 22 городов. Сравнение с Concorde на целых весах запускается отдельно через Node.js по инструкции в README.</p>
+    <p id="solvers-description" hidden>Оба варианта поиска решают одно поле. До 22 городов участвует и Held–Karp. Длины сверяются без округления. Время включает подготовку и поиск. Завершённые результаты учитываются по одному разу для каждого алгоритма.</p>
     <p id="compare-status" role="status"></p>
-    <div class="table-scroll" id="compare-table" hidden><table><thead><tr id="warmup-columns"><th>Запрос → лимит</th><th>Циклы</th><th>Вставки</th><th>Пары 2-opt</th><th>Состояния поиска</th><th>Подгот., мс</th><th>Разминка, мс</th><th>Поиск, мс</th><th>Всего, мс</th><th>Длина L</th></tr><tr id="solver-columns" hidden><th>Алгоритм</th><th>Длина L</th><th>Всего, мс</th></tr></thead><tbody id="compare-rows"></tbody></table></div>
+    <div class="table-scroll" id="compare-table" hidden><table><thead><tr id="warmup-columns"><th>Запрос → лимит</th><th>Циклы</th><th>Вставки</th><th>Пары 2-opt</th><th>Состояния поиска</th><th>Подгот., мс</th><th>Разминка, мс</th><th>Поиск, мс</th><th>Достройка, мс</th><th>Всего, мс</th><th>Длина L</th></tr><tr id="solver-columns" hidden><th>Алгоритм</th><th>Длина L</th><th>Состояния</th><th>Продолжения достройки</th><th>Всего, мс</th></tr></thead><tbody id="compare-rows"></tbody></table></div>
   </section>
   </div>
   <section id="stats-panel" hidden>
     <div class="intro"><div><div class="eyebrow"><i></i> ЭКСПЕРИМЕНТ 02</div><h1>Сбор сложности</h1>
-      <p>Серии по 1 000 полей доступны для 3–30 городов. Завершённые ручные прогоны до 100 городов также входят в таблицу и JSON.</p></div></div>
+      <p><b id="stats-scope"></b> На каждом размере алгоритмы получают одинаковые нумерованные поля. Таблица, JSON и сброс относятся к выбранному алгоритму.</p></div></div>
     <section class="panel series-panel">
       <div class="panel-head"><h2><svg><use href="#activity"/></svg>Автоматическая серия</h2><b id="series-total">0 / 28 000</b></div>
       <div class="series-body">
@@ -124,8 +142,9 @@
     <section class="panel stats-table">
       <div class="panel-head"><h2><svg><use href="#layers"/></svg>Статистика по числу городов</h2>
         <label class="metric-select">Показатель <select id="stats-metric"></select></label>
-        <button id="stats-export" class="outline" disabled>Скачать JSON</button>
-        <button id="stats-reset" class="outline" disabled>Сбросить всю статистику</button></div>
+        <button id="stats-export" class="outline" disabled>JSON алгоритма</button>
+        <button id="stats-export-all" class="outline">JSON всех алгоритмов</button>
+        <button id="stats-reset" class="outline" disabled>Сбросить данные алгоритма</button></div>
       <p id="export-status" role="status" hidden></p>
       <p id="metric-description"></p>
       <p>Минимум, максимум и среднее включают только прогоны, в которых измерялся выбранный показатель. Их число указано в столбце «Замеров». У старых прогонов нет времени и детализации разминки. Повтор ручного поиска на том же поле учитывается один раз.</p>
@@ -136,19 +155,28 @@
   </section>
 </main>
 <dialog id="dialog"><div class="dialog-head"><h2>Как устроен поиск</h2><button id="close" aria-label="Закрыть">×</button></div>
-  <p>Расстояние между городами измеряется по прямой. Самая удалённая пара становится опорными городами A и B. Цикл состоит из двух путей из A в B. Каждый промежуточный город принадлежит только одной ветви.</p>
+  <p id="held-help" hidden>Held–Karp заполняет таблицу минимальных путей по подмножествам городов. Один шаг заполняет одну ячейку. После последнего слоя восстанавливается полный оптимальный цикл. Размер ограничен 22 городами из-за памяти.</p>
+  <div id="branch-help"><p>Расстояние между городами измеряется по прямой. Самая удалённая пара становится опорными городами A и B. Цикл состоит из двух путей из A в B. Каждый промежуточный город принадлежит только одной ветви.</p>
   <h3>Откуда берётся начальный рекорд</h3><p>При n городах разминка пробует до n − 2 разных циклов, включая первый. Например, при 30 городах предел — 28. Первый маршрут строится по ближайшим городам, следующий — вставками с минимальным приростом длины. Затем перебираются развороты участков (2-opt). Обратный обход того же цикла считается один раз. Рекорд сохраняется целиком, пока не найдётся строго более короткий цикл.</p>
+  <div id="two-help">
   <h3>Как растут ветви</h3><p>Поиск развивает более короткую из открытых ветвей, сначала пробуя ближайшее продолжение. Каждая альтернатива хранит свой набор занятых городов.</p>
   <p>Если новое ребро пересекает внутреннюю часть ребра любой из двух ветвей крест-накрест, продолжение сразу отбрасывается. При замыкании проверяются и последние рёбра к B. Общие концы, касания и наложения на одной прямой допускаются. Счётчик отсечений учитывает каждое отброшенное продолжение один раз, до его постановки в очередь.</p>
   <p>Перед ветвлением поиск проверяет, можно ли соединить оставшиеся города в один путь с учётом уже выбранных рёбер. У каждого внутреннего города должны остаться вход и выход, а внутренние города должны быть связаны между собой. При обнаружении тупика поиск первым пробует ближайшую развилку длинной ветви, у которой сохранилась альтернатива.</p>
   <p>При переборе поиск сначала старается довести до B первый полный вариант по ближайшим допустимым продолжениям, сохраняя альтернативы. Дальше, когда другая ветвь дорастает до длины отложенного варианта, поиск может вернуться к нему. При отсутствии продолжения берётся ближайшая отложенная альтернатива. Разрешена и прямая ветвь A—B.</p>
   <h3>Когда доказан минимум</h3><p>Лучший цикл выбирается по сумме ℓ₁ + ℓ₂. Поиск пропускает повторные состояния с большей или равной суммой. Если нижняя оценка варианта равна рекорду или больше него, ветвление прекращается. Для оценки используются прямые расстояния до B и минимальное остовное дерево оставшихся городов с B.</p>
-  <p>Поиск начинает каждое поле с порогом очереди 4 000. Если отложенных вариантов накопилось не меньше порога, а рекорд и нижняя граница не менялись хотя бы 25 000 шагов, при очередной проверке поиск поднимает порог до 8 000. При повторном застое — до 16 000. Это позволяет раньше вернуться к другим вариантам.</p>
+  <p>Поиск начинает каждое поле с порогом очереди 4 000. Если отложенных вариантов накопилось не меньше порога, а рекорд и нижняя граница не менялись хотя бы 25 000 шагов, при очередной проверке поиск поднимает порог до 8 000, затем до 16 000 и 32 000. Свободные места заполняются вариантами из стека, чтобы раньше вернуться к другим поддеревьям. Кеш хранит до 1 000 000 состояний; на полях от 31 города старые записи вытесняются новыми.</p>
+  </div><div id="four-help" hidden><h3>Встречный поиск Hvastuns-4</h3>
+  <p>Две ветви растут от A и две от B. Короткая открытая ветвь пробует свободные города и каждый допустимый встречный конец. Первая пара может встретиться сразу, в том числе по ребру A—B. Вторая пара замыкается после посещения всех городов. На карте растущие участки показаны четырьмя цветами. Для полного цикла и графика они объединяются в два пути A—B.</p>
+  <p>Для каждого открытого конца проверяются доступные выходы. До первой встречи свободные города могут образовывать два отдельных пути. Проверяется возможность покрыть их двумя парами A—B. Если у города остались только обязательные вход и выход, поиск проверяет последствия этих рёбер для остальных городов, включая пересечения и преждевременное замыкание цикла. Противоречие сразу отсекает вариант.</p>
+  <p>Нижняя оценка учитывает либо лес из двух деревьев с четырьмя подключениями, либо одно дерево с двумя подключениями и прямую встречу другой пары. В тупике поиск берёт сохранённую альтернативу.</p></div>
   <p>Когда общая нижняя граница достигает длины лучшего цикла, поиск завершается, даже если в очереди ещё есть варианты. Это возможно сразу после разминки. Сравнение выполняется с точностью чисел JavaScript. Округление до сотых применяется только при выводе.</p>
+  <p>Начиная с 31 города оба варианта дополнительно используют нижнюю оценку через 1-дерево с обязательными рёбрами текущих ветвей. Поправки к весам подбираются при подготовке. Для сохранения нижней оценки расстояния округляются вниз только внутри этого расчёта. Длины маршрутов остаются исходными.</p>
+  <p>«Отложено» включает очередь и стек, поэтому число может превышать порог очереди. «Отсечено повторов» считает отброшенные состояния с уже известной меньшей или равной длиной. На больших полях заполненный кеш вытесняет старые записи и продолжает запоминать новые. Вытеснение записи не удаляет вариант из поиска.</p>
   <p>На оси шагов графика один шаг означает выбранный цикл разминки или обработанное состояние основного поиска. Стоимость этих действий различна. Поэтому в карточках и статистике отдельно считаются состояния, проверки при разминке и время расчёта без пауз и отрисовки. «Стоп» в ручном поиске сохраняет состояние и рекорд.</p>
   <h3>Как читать график</h3>
   <p>График начинается с первого цикла разминки на шаге 1. Синяя и оранжевая линии меняются при каждом улучшении рекорда, включая разминку. Зелёный пунктир показывает нижнюю оценку оптимума по всем оставшимся вариантам. Оценка обновляется в контрольных точках. Разница между рекордом и этой границей ограничивает возможное улучшение в единицах длины.</p>
   <p>В режиме «Баланс» энергия Ũ = h⁴(1/ℓ₁³ + 1/ℓ₂³) делится на энергию равных ветвей той же суммарной длины L. При ℓ₁ = ℓ₂ = L/2 получаем Ũ₀ = 16h⁴/L³. Отношение Q = Ũ/Ũ₀ равно 1 при точном балансе и растёт при дисбалансе. Коэффициент h сокращается.</p>
+  </div>
 </dialog>
 </body>
 </html>

@@ -53,7 +53,7 @@ test('Все лимиты сохраняют полный оптимальный
         if (seed && seed.len[0] + seed.len[1] === v.length) assert.equal(run.best, seed);
         assert.ok(v.warmupCycles <= limit);
         assert.equal(v.mainSteps + v.warmupCycles, v.steps);
-        assert.equal(v.totalMs, v.preparationMs + v.warmupMs + v.searchMs);
+        assert.equal(v.totalMs, v.preparationMs + v.warmupMs + v.searchMs + v.completionMs);
       }
     }
   }

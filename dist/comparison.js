@@ -10,10 +10,10 @@ function warmupVariants(n) {
   return Array.from(limits, ([limit, requests]) => ({ limit, requests }));
 }
 
-function initComparison(getPoints) {
+function initComparison(getPoints, getAlgorithm, record) {
   const start = el('compare-start'), stop = el('compare-stop'), status = el('compare-status');
   const body = el('compare-rows'), table = el('compare-table'), kind = el('compare-kind');
-  let worker, local, field, variants, index;
+  let worker, local, field, variants, index, firstLength, matches;
   function end(message) {
     if (worker) { worker.onmessage = worker.onerror = null; worker.terminate(); worker = null; }
     if (local) { const cancel = local; local = null; cancel({ type: 'pause' }); }
@@ -26,58 +26,49 @@ function initComparison(getPoints) {
     end('');
     body.replaceChildren();
     table.hidden = true;
+    kind.querySelector('[value="warmup"]').disabled = getAlgorithm() === 'held';
+    if (getAlgorithm() === 'held') kind.value = 'solvers';
     const solvers = kind.value === 'solvers';
     el('solvers-description').hidden = el('solver-columns').hidden = !solvers;
     el('warmup-description').hidden = el('warmup-columns').hidden = solvers;
-    if (solvers && getPoints().length > 22) {
-      start.disabled = true;
-      status.textContent = 'Для сравнения с Held–Karp выбери до 22 городов.';
-    }
   }
   function launch() {
-    const options = { type: 'start', points: field, warmupLimit: variants[index].limit };
-    status.textContent = 'Расчёт ' + (index + 1) + ' из ' + variants.length + ' · лимит ' + options.warmupLimit;
+    const { algorithm, limit } = variants[index];
+    const options = { type: 'start', algorithm, points: field, warmupLimit: limit };
+    status.textContent = 'Расчёт ' + (index + 1) + ' из ' + variants.length + ' · ' + ROUTE_ALGORITHMS[algorithm];
     if (worker) worker.postMessage(options);
     else local(options);
   }
   function receive(message) {
     if (!field) return;
+    if (message.error) { end(message.error); return; }
     if (!message.done) {
-      status.textContent = 'Расчёт ' + (index + 1) + ' из ' + variants.length + ' · лимит ' + variants[index].limit +
-        ' · состояний поиска: ' + integer.format(message.mainSteps);
+      status.textContent = 'Расчёт ' + (index + 1) + ' из ' + variants.length + ' · ' + ROUTE_ALGORITHMS[variants[index].algorithm] +
+        ' · состояний поиска: ' + integer.format(message.mainSteps) +
+        (message.completionChecks ? ' · продолжений достройки: ' + integer.format(message.completionChecks) : '');
       return;
     }
-    const { limit, requests } = variants[index], v = measuredValues(message.measurement);
+    const { algorithm, limit, requests } = variants[index], v = measuredValues(message.measurement);
     const row = body.insertRow();
-    for (const value of [requests.join(', ') + ' → ' + limit, v.warmupCycles, v.insertionChecks,
-      v.twoOptChecks, v.mainSteps, v.preparationMs, v.warmupMs, v.searchMs, v.totalMs, v.length]) {
-      row.insertCell().textContent = typeof value === 'number' ? clockNumber.format(value) : value;
-    }
+    const solvers = kind.value === 'solvers';
+    const values = solvers ? [ROUTE_ALGORITHMS[algorithm], v.length, v.mainSteps, v.completionChecks ?? '—', v.totalMs] :
+      [requests.join(', ') + ' → ' + limit, v.warmupCycles, v.insertionChecks, v.twoOptChecks, v.mainSteps,
+        v.preparationMs, v.warmupMs, v.searchMs, v.completionMs, v.totalMs, v.length];
+    for (const value of values) row.insertCell().textContent = typeof value === 'number' ? clockNumber.format(value) : value;
+    if (firstLength === undefined) firstLength = v.length;
+    if (Math.abs(firstLength - v.length) > 1e-8) matches = false;
+    if (solvers) record(algorithm, field, message.measurement);
     if (++index < variants.length) launch();
-    else end('Готово. Для каждого лимита показано время до подтверждения оптимума.');
+    else end(matches ? 'Готово. Оптимальные длины совпали.' : 'Обнаружено расхождение длин.');
   }
   start.onclick = () => {
     clear();
     field = getPoints();
-    if (kind.value === 'solvers') {
-      if (field.length > 22) return;
-      try { worker = new Worker('solver-worker.js'); }
-      catch { end('Для этого сравнения открой приложение через локальный сервер или GitHub Pages.'); return; }
-      worker.onerror = () => end('Расчёт прерван. Попробуй меньшее поле или открой приложение через локальный сервер.');
-      worker.onmessage = ({ data }) => {
-        const row = body.insertRow();
-        for (const v of [data.name, distance.format(data.length), clockNumber.format(data.ms)]) row.insertCell().textContent = v;
-        if (data.done) end(data.matches ? 'Оба алгоритма подтвердили одинаковую длину.' : 'Обнаружено расхождение длин.');
-        else status.textContent = 'Идёт расчёт Held–Karp…';
-      };
-      status.textContent = 'Идёт расчёт khvastuns…';
-      start.disabled = true;
-      stop.disabled = false;
-      table.hidden = false;
-      worker.postMessage(field);
-      return;
-    }
-    variants = warmupVariants(field.length);
+    firstLength = undefined;
+    matches = true;
+    variants = kind.value === 'solvers' ? Object.keys(ROUTE_ALGORITHMS)
+      .filter(id => id !== 'held' || field.length <= 22).map(algorithm => ({ algorithm })) :
+      warmupVariants(field.length).map(variant => ({ ...variant, algorithm: getAlgorithm() }));
     index = 0;
     if (location.protocol !== 'file:' && typeof Worker !== 'undefined') {
       try { worker = new Worker('series-runner.js'); } catch { /* Доступен расчёт в текущей вкладке. */ }

@@ -118,6 +118,7 @@ class Search {
     std::int64_t checkpoint = 0, lastProgress = 0;
     std::array<Row, maxN> dist{}, near{};
     std::array<std::array<std::array<std::int8_t, maxN>, maxN>, maxN> turn{};
+    std::array<std::array<Mask, maxN>, maxN> interior{};
     std::array<std::array<Allowed, maxN>, maxN> blocked{};
     std::array<std::array<bool, maxN>, maxN> cached{};
     std::unordered_map<Mask, int> trees;
@@ -139,7 +140,10 @@ class Search {
         if (cached[from][to]) return row;
         cached[from][to] = true;
         for (int i = 0; i < n; ++i) for (int j = i + 1; j < n; ++j) {
-            if (turn[from][to][i] * turn[from][to][j] >= 0 || turn[i][j][from] * turn[i][j][to] >= 0) continue;
+            if (i == from || i == to || j == from || j == to) continue;
+            const bool crosses = turn[from][to][i] * turn[from][to][j] < 0 && turn[i][j][from] * turn[i][j][to] < 0;
+            const bool touches = (interior[from][to] & (bit(i) | bit(j))) || (interior[i][j] & (bit(from) | bit(to)));
+            if (!crosses && !touches) continue;
             const int crossed = dist[from][to] + dist[i][j];
             if (crossed <= std::max(dist[from][i] + dist[to][j], dist[from][j] + dist[to][i])) continue;
             row[i] |= bit(j);
@@ -302,7 +306,7 @@ class Search {
                 for (const auto& state : *group) lower = std::min(lower, bound(*state));
             }
             if (lower > globalBound) { globalBound = lower; lastProgress = steps(); }
-            if (globalBound < best && queueLimit < 16000 && pending() + int(stack.size()) >= queueLimit &&
+            if (globalBound < best && queueLimit < 32000 && pending() + int(stack.size()) >= queueLimit &&
                 steps() - std::max(bestStep, lastProgress) >= 25000) {
                 queueLimit *= 2;
                 lastProgress = steps();
@@ -408,7 +412,7 @@ class Search {
             if (bound(s) >= best) { ++boundCuts; return; }
             if (isBlocked(s, u, v)) { ++deadEndCuts; retryLonger(s); return; }
             if (found != seen.end()) found->second = s.length();
-            else if (seen.size() < 250000) seen.emplace(key, s.length());
+            else if (seen.size() < 1000000) seen.emplace(key, s.length());
             branch(s);
         }
     }
@@ -425,6 +429,9 @@ public:
                 for (int k = 0; k < n; ++k) {
                     auto cross = dx * (points[k].y - points[i].y) - dy * (points[k].x - points[i].x);
                     turn[i][j][k] = static_cast<std::int8_t>((cross > 0) - (cross < 0));
+                    const std::int64_t px = points[k].x - points[i].x, py = points[k].y - points[i].y;
+                    if (!cross && px * (points[k].x - points[j].x) + py * (points[k].y - points[j].y) < 0)
+                        interior[i][j] |= bit(k);
                 }
             }
             std::iota(near[i].begin(), near[i].begin() + n, 0);

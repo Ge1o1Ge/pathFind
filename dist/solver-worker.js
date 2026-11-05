@@ -1,6 +1,6 @@
 'use strict';
 
-importScripts('search.js', 'held-karp.js');
+importScripts('one-tree.js', 'search.js', 'held-karp.js');
 self.onmessage = ({ data: points }) => {
   const run = new RouteSearch(points);
   run.advance();
