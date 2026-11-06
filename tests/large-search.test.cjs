@@ -89,7 +89,7 @@ test('Кеш хранит меньшую цену и после заполнен
 test('Обычный вход на 40 городах использует усиленную оценку и совпадает с Concorde', () => {
   const points = production.seriesField(40, 0);
   // Оптимум этого поля подтверждён отдельным запуском Concorde на ceil(1000 × расстояние).
-  for (const algorithm of ['khvastuns', 'hvastuns-4']) {
+  for (const algorithm of ['khvastuns', 'hvastuns-4', 'hvastuns-var', 'hvastuns-staged']) {
     const run = production.createRouteSearch(algorithm, points, undefined, true);
     assert.ok(run.oneTree);
     run.advance(100000);

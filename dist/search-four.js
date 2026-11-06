@@ -1,11 +1,15 @@
 'use strict';
 
-const ROUTE_ALGORITHMS = { khvastuns: 'khvastuns', 'hvastuns-4': 'Hvastuns-4', held: 'Held–Karp' };
+const ROUTE_ALGORITHMS = { khvastuns: 'khvastuns', 'hvastuns-4': 'Hvastuns-4', 'hvastuns-var': 'Hvastuns-var', 'hvastuns-staged': 'Hvastuns-var · поэтапно', held: 'Held–Karp' };
 
-function createRouteSearch(algorithm, points, limit, integerWeights) {
-  if (algorithm === 'hvastuns-4') return new FourBranchSearch(points, limit, integerWeights);
+function isVariableAlgorithm(algorithm) { return algorithm === 'hvastuns-var' || algorithm === 'hvastuns-staged'; }
+
+function createRouteSearch(algorithm, points, limit, integerWeights, initialTour, scoreModel) {
+  if (algorithm === 'hvastuns-staged') return new StagedRouteSearch(points, limit, integerWeights, initialTour, scoreModel);
+  if (algorithm === 'hvastuns-var') return new VariableRouteSearch(points, limit, integerWeights, initialTour, scoreModel);
+  if (algorithm === 'hvastuns-4') return new FourBranchSearch(points, limit, integerWeights, initialTour);
   if (algorithm === 'held') return new HeldKarpSearch(points);
-  if (algorithm === 'khvastuns' || algorithm === undefined) return new RouteSearch(points, limit, integerWeights);
+  if (algorithm === 'khvastuns' || algorithm === undefined) return new RouteSearch(points, limit, integerWeights, initialTour);
   throw new Error('Неизвестный алгоритм поиска');
 }
 

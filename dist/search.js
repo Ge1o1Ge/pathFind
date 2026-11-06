@@ -24,6 +24,12 @@ function cycleKey(tour) {
   return tail.join(',');
 }
 
+function tourFromBest(run) {
+  if (!run.best) return null;
+  const [out, back] = run.best.paths;
+  return out.concat(back.slice(1, -1).reverse());
+}
+
 class CandidateQueue {
   constructor() { this.items = []; }
   get first() { return this.items[0]; }
@@ -70,7 +76,7 @@ class CandidateQueue {
 }
 
 class RouteSearch {
-  constructor(points, warmupLimit = points.length - 2, integerWeights = false) {
+  constructor(points, warmupLimit = points.length - 2, integerWeights = false, initialTour) {
     const started = performance.now();
     this.n = points.length;
     this.wide = this.n > 30;
@@ -78,7 +84,8 @@ class RouteSearch {
     this.bit = points.map((_, i) => this.wide ? 1n << BigInt(i) : 1 << i);
     const full = this.wide ? (1n << BigInt(this.n)) - 1n : (1 << this.n) - 1;
     this.lowIndex = this.wide ? new Map(this.bit.map((mask, i) => [mask, i])) : null;
-    this.warmupLimit = Math.min(this.n - 2, Math.max(0, Math.floor(warmupLimit)));
+    this.hasInitialTour = initialTour !== undefined;
+    this.warmupLimit = this.hasInitialTour ? 0 : Math.min(this.n - 2, Math.max(0, Math.floor(warmupLimit)));
     this.warmupCount = 0;
     this.greedyChecks = 0;
     this.insertionChecks = 0;
@@ -138,6 +145,7 @@ class RouteSearch {
     this.best = null;
     this.history = [];
     this.bound = this.candidateBound(this.next);
+    if (this.hasInitialTour) this.useInitialTour(seedRoot, initialTour);
     const prepared = performance.now();
     this.preparationMs = prepared - started;
     if (this.warmupLimit) this.warmUp(seedRoot);
@@ -151,7 +159,8 @@ class RouteSearch {
       this.preparationMs += performance.now() - warmed;
     }
     const searchStarted = performance.now();
-    this.note = this.best ? 'До основного поиска проверено циклов: ' + this.warmupCount + '. На карте — самый короткий из них.'
+    this.note = this.hasInitialTour ? 'Полный цикл принят как начальный рекорд. Проверяем, существует ли более короткий.' :
+      this.best ? 'До основного поиска проверено циклов: ' + this.warmupCount + '. На карте — самый короткий из них.'
       : 'Разминка отключена. Первый цикл построит основной поиск.';
     this.current = this.best || this.next;
     this.lastQueueProgress = this.steps;
@@ -163,6 +172,19 @@ class RouteSearch {
   get warmupCandidates() { return this.insertionChecks + this.twoOptChecks; }
   get totalMs() { return this.preparationMs + this.warmupMs + this.searchMs + this.completionMs; }
   searchRoot(seed) { return seed; }
+  useInitialTour(root, input) {
+    if (!Array.isArray(input) || input.length !== this.n || new Set(input).size !== this.n ||
+        input.some(city => !Number.isInteger(city) || city < 0 || city >= this.n)) {
+      throw new Error('Начальный цикл должен содержать каждый номер города ровно один раз, без повторения первого в конце.');
+    }
+    const start = input.indexOf(this.a), tour = input.slice(start).concat(input.slice(0, start)), split = tour.indexOf(this.b);
+    let state = root;
+    // Принимаем сам маршрут, а длину считаем заново. Чужому значению рекорда и заявлению об оптимальности не доверяем.
+    for (let i = 1; i <= split; i++) state = this.extend(state, 0, tour[i]);
+    for (let i = this.n - 1; i >= split; i--) state = this.extend(state, 1, tour[i]);
+    this.best = state;
+    this.history.push({ step: 0, len: state.len, bound: this.bound });
+  }
   greedySeed(seed = this.next) {
     while (seed.free) {
       const side = this.shorter(seed);
@@ -496,8 +518,13 @@ class RouteSearch {
   }
   candidateBound(s) {
     if (s.bound === undefined) {
-      s.bound = this.lowerBound(s, s.paths[0].at(-1), s.paths[1].at(-1));
-      if (this.oneTree) s.bound = Math.max(s.bound, this.oneTree.bound(s.paths));
+      const u = s.paths[0].at(-1), v = s.paths[1].at(-1);
+      const upper = this.best ? this.best.len[0] + this.best.len[1] : Infinity;
+      s.bound = s.len[0] + s.len[1] + (this.dist[u][this.b] + this.dist[v][this.b]);
+      // Достигнув рекорда, вариант уже исключён: более дорогие оценки ему не нужны.
+      // У оставшихся вариантов вычисляем прежний максимум всех оценок.
+      if (s.bound < upper && this.oneTree) s.bound = Math.max(s.bound, this.oneTree.bound(s.paths));
+      if (s.bound < upper) s.bound = Math.max(s.bound, this.lowerBound(s, u, v));
     }
     return s.bound;
   }
@@ -518,14 +545,14 @@ class RouteSearch {
   }
   recordProgress() {
     const total = this.best ? this.best.len[0] + this.best.len[1] : Infinity;
-    const exhausted = !this.next && !this.pending && !this.stack.length && !this.completion;
+    const exhausted = !this.next && !this.pending && !this.stack.length && !this.completion && !this.deferredCount;
     if (exhausted) {
       this.bound = total;
     } else if (this.steps === this.nextCheckpoint && this.bound < total) {
       // Оптимум покрыт либо рекордом, либо одним из ещё открытых поддеревьев.
       let lower = this.next ? Math.min(total, this.candidateBound(this.next)) : total;
       if (this.completion) lower = Math.min(lower, this.candidateBound(this.completion.root));
-      for (const group of [this.stack, this.queues[0].items, this.queues[1].items]) {
+      for (const group of this.frontierGroups()) {
         for (const state of group) lower = Math.min(lower, this.candidateBound(state));
       }
       if (lower > this.bound) {
@@ -547,10 +574,7 @@ class RouteSearch {
       this.bound = total;
       this.note = exhausted ? 'Все перспективные варианты проверены. Длина лучшего цикла минимальна.'
         : 'Нижняя граница достигла рекорда. Поиск завершён досрочно.';
-      this.next = null;
-      this.completion = null;
-      this.stack.length = 0;
-      for (const queue of this.queues) queue.items.length = 0;
+      this.clearFrontier();
     }
     const previous = this.history.at(-1);
     if (this.best && (!previous || previous.len !== this.best.len || previous.bound !== this.bound)) {
@@ -559,6 +583,14 @@ class RouteSearch {
   }
   get pending() {
     return this.queues[0].items.length + this.queues[1].items.length;
+  }
+  get deferredCount() { return 0; }
+  frontierGroups() { return [this.stack, this.queues[0].items, this.queues[1].items]; }
+  clearFrontier() {
+    this.next = null;
+    this.completion = null;
+    this.stack.length = 0;
+    for (const queue of this.queues) queue.items.length = 0;
   }
   queueFor(s) { return this.queues[s.side]; }
   refillQueues() {
